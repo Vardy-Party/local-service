@@ -1,10 +1,9 @@
 name: Publish runtime NuGets
 
-# Public Vardy-Party/local-service only. Builds the self-contained host, strips
-# Strategy plugin DLLs, and pushes VardyParty.LocalService.Runtime.<rid> to
-# GitHub Packages. It does not create a GitHub Release and it does not sign
-# installers. M3U8-resolver turns those packages plus the private Strategy
-# plugins into the release.
+# Public Vardy-Party/local-service only. After CI succeeds, publish the
+# self-contained host as VardyParty.LocalService.Runtime.<rid>. This repo does
+# not create a GitHub Release, sign installers, or take a Strategies dispatch.
+# M3U8-resolver builds the release from these packages and the Strategies feed.
 
 on:
   workflow_run:
@@ -66,7 +65,7 @@ jobs:
           NUGET_TOKEN: ${{ secrets.NUGET_GITHUB_TOKEN }}
         run: |
           if [ -z "${NUGET_TOKEN}" ]; then
-            echo "::error::NUGET_GITHUB_TOKEN is required so the build can restore private Strategy plugins. The plugins are not packed into the nupkg."
+            echo "::error::NUGET_GITHUB_TOKEN (read:packages) is required to restore the host's package references. Strategy plugin assemblies are omitted from the nupkg."
             exit 1
           fi
           USERNAME="${NUGET_USER:-x-access-token}"
@@ -100,47 +99,3 @@ jobs:
             --source "https://nuget.pkg.github.com/Vardy-Party/index.json" \
             --api-key "${{ secrets.GITHUB_TOKEN }}" \
             --skip-duplicate
-
-  dispatch-private-release:
-    name: Dispatch private release
-    needs: pack-runtime
-    if: |
-      github.repository == 'Vardy-Party/local-service' &&
-      needs.pack-runtime.result == 'success'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-        with:
-          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
-
-      - name: Read version
-        id: ver
-        shell: bash
-        run: |
-          VERSION="$(grep -oP '(?<=<Version>)[^<]+' VardyParty.LocalService/VardyParty.LocalService.csproj | head -n1)"
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-
-      - name: Dispatch M3U8-resolver
-        env:
-          GH_TOKEN: ${{ secrets.M3U8_RESOLVER_DISPATCH_TOKEN }}
-          DISPATCH_TOKEN: ${{ secrets.M3U8_RESOLVER_DISPATCH_TOKEN }}
-          VERSION: ${{ steps.ver.outputs.version }}
-        run: |
-          set -euo pipefail
-          if [ -z "${DISPATCH_TOKEN}" ]; then
-            echo "::error::Set M3U8_RESOLVER_DISPATCH_TOKEN (contents:write on Vardy-Party/M3U8-resolver) so the private repo can package Strategy plugins and create the release."
-            exit 1
-          fi
-          if gh release view "v${VERSION}" --repo Vardy-Party/M3U8-resolver >/dev/null 2>&1; then
-            echo "Private release v${VERSION} already exists. Not dispatching again."
-            exit 0
-          fi
-          curl -fsS -X POST \
-            -H "Authorization: Bearer ${DISPATCH_TOKEN}" \
-            -H "Accept: application/vnd.github+json" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            https://api.github.com/repos/Vardy-Party/M3U8-resolver/dispatches \
-            -d "{\"event_type\":\"local-service-runtime-published\",\"client_payload\":{\"version\":\"${VERSION}\",\"source_sha\":\"${{ github.sha }}\",\"run_url\":\"${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}\"}}"
