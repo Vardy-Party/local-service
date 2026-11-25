@@ -1,0 +1,86 @@
+name: vardyparty-local-service
+base: core22
+version: "1.1.30"
+summary: VardyParty Local Service
+license: Proprietary
+description: |
+  Local service host for VardyParty integrations.
+
+grade: devel
+# Classic, same as the Client snap. Devmode is a development sandbox, not a
+# released installer. Sideload with: snap install --classic --dangerous
+confinement: classic
+
+architectures:
+  - build-on: [amd64]
+
+# Chromium and GTK load these with dlopen, so the library linter reports them
+# as unused. libcoreclrtraceptprovider.so optionally needs liblttng-ust.so.0,
+# which core22 does not ship; EventPipe tracing stays disabled without it.
+lint:
+  ignore:
+    - library:
+        - opt/vardyparty-local-service/libcoreclrtraceptprovider.so*
+        - usr/lib/**/libXss.so*
+        - usr/lib/**/libXtst.so*
+        - usr/lib/**/libasound.so*
+        - usr/lib/**/libcolordprivate.so*
+        - usr/lib/**/libdconf.so*
+        - usr/lib/**/libgbm.so*
+        - usr/lib/**/libgthread-2.0.so*
+        - usr/lib/**/libicuio.so*
+        - usr/lib/**/libicutest.so*
+        - usr/lib/**/libsmime3.so*
+        - usr/lib/**/libssl3.so*
+        - usr/lib/**/libxshmfence.so*
+
+apps:
+  service:
+    command: opt/vardyparty-local-service/VardyParty.LocalService
+    daemon: simple
+    restart-condition: always
+    environment:
+      DOTNET_SYSTEM_GLOBALIZATION_INVARIANT: "1"
+      PLAYWRIGHT_DRIVER_SEARCH_PATH: $SNAP/opt/vardyparty-local-service
+      LD_LIBRARY_PATH: $SNAP/usr/lib:$SNAP/usr/lib/x86_64-linux-gnu:$SNAP/lib:$SNAP/lib/x86_64-linux-gnu
+    plugs:
+      - network
+      - network-bind
+      - avahi-observe
+
+parts:
+  local-service:
+    plugin: dump
+    source: local-service
+    override-build: |
+      mkdir -p "$CRAFT_PART_INSTALL/opt/vardyparty-local-service"
+      cp -R "$CRAFT_PART_SRC/." "$CRAFT_PART_INSTALL/opt/vardyparty-local-service/"
+    stage-packages:
+      - libnspr4
+      - libnss3
+      - libatk1.0-0
+      - libatk-bridge2.0-0
+      - libasound2
+      - libcups2
+      - libdrm2
+      - libgbm1
+      - libglib2.0-0
+      - libgtk-3-0
+      - libx11-6
+      - libx11-xcb1
+      - libxcb1
+      - libxcomposite1
+      - libxdamage1
+      - libxext6
+      - libxfixes3
+      - libxkbcommon0
+      - libxrandr2
+      - libxrender1
+      - libxshmfence1
+      - libxss1
+      - libxtst6
+      - libxinerama1
+      - libatspi2.0-0
+      - libpango-1.0-0
+      - libcairo2
+      - ca-certificates

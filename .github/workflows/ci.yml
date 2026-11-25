@@ -1,0 +1,249 @@
+name: CI
+
+# Feature-branch CI via pull_request only. Push is main-only so a PR push does
+# not also fire a duplicate branch-push workflow (same pattern as Client).
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  # Strategies-published packages need a read:packages PAT on this repo.
+  # GITHUB_TOKEN alone 403s for cross-repo org packages unless ACLs grant access.
+  NUGET_FEED_URL: https://nuget.pkg.github.com/Vardy-Party/index.json
+
+jobs:
+  build-and-test:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # GitHub's ubuntu-latest image is amd64. The check name says so.
+          - name: Build + Test (ubuntu-latest-amd64)
+            os: ubuntu-latest
+            publish_rid: linux-x64
+          - name: Build + Test (windows-latest)
+            os: windows-latest
+            publish_rid: ""
+          - name: Build + Test (macos-latest)
+            os: macos-latest
+            publish_rid: ""
+          # A different machine from ubuntu-latest. Same matrix, ARM runner.
+          - name: Build + Test (ubuntu-24.04-arm)
+            os: ubuntu-24.04-arm
+            publish_rid: linux-arm64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: global.json
+          source-url: ${{ env.NUGET_FEED_URL }}
+        env:
+          NUGET_AUTH_TOKEN: ${{ secrets.NUGET_GITHUB_TOKEN }}
+
+      - name: Authenticate GitHub Packages (NuGet.config)
+        shell: bash
+        env:
+          NUGET_USER: ${{ secrets.NUGET_GITHUB_USERNAME }}
+          NUGET_TOKEN: ${{ secrets.NUGET_GITHUB_TOKEN }}
+        run: |
+          if [ -z "${NUGET_TOKEN}" ]; then
+            echo "::error::Repo secret NUGET_GITHUB_TOKEN is not set. Add a GitHub PAT with read:packages (Settings → Secrets and variables → Actions). Do not paste the token into PR comments."
+            exit 1
+          fi
+          # Write credentials into the repo NuGet.config that restore actually uses.
+          # User-level `dotnet nuget add source` is wiped by <clear /> in NuGet.config.
+          USERNAME="${NUGET_USER:-x-access-token}"
+          dotnet nuget update source github-vardy-party \
+            --username "${USERNAME}" \
+            --password "${NUGET_TOKEN}" \
+            --store-password-in-clear-text \
+            --configfile NuGet.config
+
+      - name: Restore
+        run: dotnet restore VardyParty.LocalService.slnx
+
+      - name: Build
+        shell: pwsh
+        env:
+          PUBLISH_RID: ${{ matrix.publish_rid }}
+        run: |
+          # Linux matrix legs build LocalService for that RID. The solution build
+          # also compiles InstallerBootstrapper, which is hardcoded to win-x64.
+          if ($env:PUBLISH_RID) {
+            dotnet build VardyParty.LocalService/VardyParty.LocalService.csproj -c Release -r $env:PUBLISH_RID --self-contained true
+          } else {
+            dotnet build VardyParty.LocalService.slnx -c Release --no-restore
+          }
+
+      - name: Publish ${{ matrix.publish_rid }}
+        if: matrix.publish_rid != ''
+        run: dotnet publish VardyParty.LocalService/VardyParty.LocalService.csproj -c Release -r ${{ matrix.publish_rid }} --self-contained true --no-build -o artifacts/publish/${{ matrix.publish_rid }}
+
+      - name: Test
+        shell: pwsh
+        env:
+          PUBLISH_RID: ${{ matrix.publish_rid }}
+        run: |
+          # Only real test projects (exclude *TestClient*). Aggregate failures so a
+          # later green project cannot mask an earlier failed suite (Win/mac FS order
+          # previously hid Playwright.Tests failures behind TestClient exit 0).
+          $testProjects = Get-ChildItem -Recurse -Filter *.csproj | Where-Object {
+            $_.Name -match '\.Tests\.csproj$' -or $_.Name -match '(?<![A-Za-z])Tests?\.csproj$'
+          }
+
+          if (-not $testProjects) {
+            Write-Host 'No test projects found. Skipping tests.'
+            exit 0
+          }
+
+          $failed = $false
+          foreach ($project in $testProjects) {
+            Write-Host "Running tests in $($project.FullName)"
+            # Live Integration tests hit third-party match URLs / need browsers;
+            # keep them opt-in via Category=Integration (and RUN_LIVE_V1_SCRAPE_TESTS=1 in Strategies).
+            # Linux legs did not build the test projects; let dotnet test compile them.
+            $noBuild = @()
+            if (-not $env:PUBLISH_RID) { $noBuild = @('--no-build') }
+            dotnet test $project.FullName -c Release @noBuild --verbosity normal --filter "Category!=Integration"
+            if ($LASTEXITCODE -ne 0) {
+              $failed = $true
+            }
+          }
+
+          if ($failed) {
+            exit 1
+          }
+
+  # Pester tests for .github/scripts (Strategies package auto-update). Same
+  # suite on every OS because the script does path, BOM and line-ending work.
+  script-tests:
+    name: Script tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Pester
+        shell: pwsh
+        run: |
+          if (-not (Get-Module -ListAvailable Pester | Where-Object Version -ge '5.0')) {
+            # Pinned exact version from PSGallery (rarely runs: the runner images ship Pester 5).
+            Install-Module Pester -RequiredVersion 5.7.1 -Repository PSGallery -Scope CurrentUser -Force
+          }
+          Import-Module Pester -MinimumVersion 5.0
+          Invoke-Pester ./.github/scripts -CI
+  pack-shared-nugets:
+    name: Pack shared NuGets (Client)
+    runs-on: ubuntu-latest
+    needs: build-and-test
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: global.json
+          source-url: ${{ env.NUGET_FEED_URL }}
+        env:
+          NUGET_AUTH_TOKEN: ${{ secrets.NUGET_GITHUB_TOKEN }}
+
+      - name: Authenticate GitHub Packages (NuGet.config)
+        shell: bash
+        env:
+          NUGET_USER: ${{ secrets.NUGET_GITHUB_USERNAME }}
+          NUGET_TOKEN: ${{ secrets.NUGET_GITHUB_TOKEN }}
+        run: |
+          if [ -z "${NUGET_TOKEN}" ]; then
+            echo "::error::Repo secret NUGET_GITHUB_TOKEN is not set. Add a GitHub PAT with read:packages (Settings → Secrets and variables → Actions). Do not paste the token into PR comments."
+            exit 1
+          fi
+          USERNAME="${NUGET_USER:-x-access-token}"
+          dotnet nuget update source github-vardy-party \
+            --username "${USERNAME}" \
+            --password "${NUGET_TOKEN}" \
+            --store-password-in-clear-text \
+            --configfile NuGet.config
+
+      - name: Detect main branch package changes
+        id: pkg_changes
+        shell: pwsh
+        run: |
+          $isMain = "${{ github.ref }}" -eq 'refs/heads/main'
+          $isPush = "${{ github.event_name }}" -eq 'push'
+
+          if (-not $isMain -or -not $isPush) {
+            "should_publish=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+            Write-Host 'Skipping publish: not a push on main.'
+            exit 0
+          }
+
+          $before = "${{ github.event.before }}"
+          if ([string]::IsNullOrWhiteSpace($before) -or $before -eq '0000000000000000000000000000000000000000') {
+            $before = (git rev-list --max-parents=0 HEAD | Select-Object -First 1)
+          }
+
+          $changedFiles = git diff --name-only $before "${{ github.sha }}"
+          $patterns = @(
+            'VardyParty.LocalService.Client/*'
+          )
+          $changed = $false
+          foreach ($file in $changedFiles) {
+            foreach ($pat in $patterns) {
+              if ($file -like $pat) {
+                $changed = $true
+                break
+              }
+            }
+            if ($changed) { break }
+          }
+
+          "should_publish=$($changed.ToString().ToLowerInvariant())" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          Write-Host "Client package changed: $changed"
+
+      - name: Restore packable projects
+        run: |
+          dotnet restore VardyParty.LocalService.Client/VardyParty.LocalService.Client.csproj
+
+      - name: Pack Client
+        run: |
+          mkdir -p ${{ github.workspace }}/artifacts/nuget
+          dotnet pack VardyParty.LocalService.Client/VardyParty.LocalService.Client.csproj -c Release --no-restore -o ${{ github.workspace }}/artifacts/nuget
+
+      - name: Upload NuGet artifacts
+        if: steps.pkg_changes.outputs.should_publish == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: shared-nuget-preview
+          path: ${{ github.workspace }}/artifacts/nuget/*.nupkg
+          retention-days: 2
+
+      - name: Publish NuGet packages to GitHub Packages
+        # Client stays on this private repo's package feed. The public local-service
+        # repo publishes runtime host packages instead, and must not push this id.
+        if: steps.pkg_changes.outputs.should_publish == 'true' && github.repository == 'Vardy-Party/M3U8-resolver'
+        run: dotnet nuget push "${{ github.workspace }}/artifacts/nuget/*.nupkg" --source "https://nuget.pkg.github.com/Vardy-Party/index.json" --api-key "${{ secrets.GITHUB_TOKEN }}" --skip-duplicate

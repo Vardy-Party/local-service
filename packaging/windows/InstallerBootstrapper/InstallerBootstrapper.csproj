@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+	<OutputType>Exe</OutputType>
+	<TargetFramework>net11.0</TargetFramework>
+	<ImplicitUsings>enable</ImplicitUsings>
+	<Nullable>enable</Nullable>
+	<GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+	<ApplicationManifest>app.manifest</ApplicationManifest>
+	<RuntimeIdentifier>win-x64</RuntimeIdentifier>
+	<!--
+	  End-user elevated installer: publish it the same way as the MSIX payload
+	  (self-contained, so no .NET runtime is needed on the target machine) and as
+	  one compressed EXE, because every build script copies and signs only
+	  InstallerBootstrapper.exe (see docs/BOOTSTRAPPER.md). Trimmed: it only uses
+	  Console/File/Process, so the trimmed EXE stays small inside the MSIX.
+	-->
+	<SelfContained>true</SelfContained>
+	<PublishSingleFile>true</PublishSingleFile>
+	<EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+	<IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+	<PublishTrimmed>true</PublishTrimmed>
+	<InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+</Project>

@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFrameworks>net11.0;netstandard2.1</TargetFrameworks>
+    <LangVersion>latest</LangVersion>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>true</IsPackable>
+    <Version>0.5.0</Version>
+    <PackageId>VardyParty.LocalService.Client</PackageId>
+    <Authors>VardyParty</Authors>
+    <Description>Client library for discovering and connecting to VardyParty Local Service instances.</Description>
+    <RepositoryUrl>https://github.com/Vardy-Party/local-service</RepositoryUrl>
+    <PackageReadmeFile>VardyParty.LocalService.Client.md</PackageReadmeFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.Text.Json" Version="11.0.0" Condition="'$(TargetFramework)' == 'netstandard2.1'" />
+    <!-- Newest published Strategies packages on the GitHub Packages feed (the Update Strategies packages bot raises these). -->
+    <PackageReference Include="VardyParty.LocalService.Abstractions" Version="0.2.7" />
+    <PackageReference Include="VardyParty.LocalService.V1" Version="0.1.5" />
+    <PackageReference Include="VardyParty.LocalService.V2" Version="0.1.7" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="..\VardyParty.LocalService.Client.md" Pack="true" PackagePath="\" Link="VardyParty.LocalService.Client.md" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,387 @@
+name: Release from public runtime
+
+# Private Vardy-Party/M3U8-resolver only.
+# local-service dispatches this after it pushes VardyParty.LocalService.Runtime.<rid>
+# packages that do not contain Strategy plugins. This workflow downloads those
+# packages, copies the private Strategy DLLs back in, and creates the GitHub Release.
+
+on:
+  repository_dispatch:
+    types:
+      - local-service-runtime-published
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Local Service version already published as runtime NuGets (for example 1.1.30)
+        required: true
+        type: string
+
+concurrency:
+  group: release-from-public-runtime
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  packages: read
+
+env:
+  RUNTIME_VERSION: ${{ github.event.client_payload.version || inputs.version }}
+  NUGET_FEED_URL: https://nuget.pkg.github.com/Vardy-Party/index.json
+
+jobs:
+  guard:
+    name: Guard unique release
+    if: github.repository == 'Vardy-Party/M3U8-resolver'
+    runs-on: ubuntu-latest
+    outputs:
+      should_release: ${{ steps.check.outputs.should_release }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Validate dispatch
+        if: github.event_name == 'repository_dispatch'
+        shell: pwsh
+        env:
+          RUN_URL: ${{ github.event.client_payload.run_url }}
+          SOURCE_SHA: ${{ github.event.client_payload.source_sha }}
+        run: |
+          . ./.github/scripts/RuntimeNuget.ps1
+          Assert-LocalServiceDispatch $env:RUN_URL $env:SOURCE_SHA | Out-Null
+
+      - name: Check tag
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git fetch --tags --force origin
+          VERSION="${RUNTIME_VERSION}"
+          if [[ -z "${VERSION}" ]]; then
+            echo "::error::No runtime version. Dispatch client_payload.version or workflow input version is required."
+            exit 1
+          fi
+          TAG="v${VERSION}"
+          if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null || gh release view "${TAG}" >/dev/null 2>&1; then
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::${TAG} already exists. Skipping."
+            exit 0
+          fi
+          echo "should_release=true" >> "$GITHUB_OUTPUT"
+
+  package-windows-msix:
+    name: Package Windows (MSIX)
+    needs: guard
+    if: github.repository == 'Vardy-Party/M3U8-resolver' && needs.guard.outputs.should_release == 'true'
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: global.json
+          source-url: ${{ env.NUGET_FEED_URL }}
+        env:
+          NUGET_AUTH_TOKEN: ${{ secrets.NUGET_GITHUB_TOKEN }}
+
+      - name: Authenticate GitHub Packages (NuGet.config)
+        shell: bash
+        env:
+          NUGET_USER: ${{ secrets.NUGET_GITHUB_USERNAME }}
+          NUGET_TOKEN: ${{ secrets.NUGET_GITHUB_TOKEN }}
+        run: |
+          USERNAME="${NUGET_USER:-x-access-token}"
+          dotnet nuget update source github-vardy-party \
+            --username "${USERNAME}" \
+            --password "${NUGET_TOKEN}" \
+            --store-password-in-clear-text \
+            --configfile NuGet.config
+
+      - name: Install published runtime and Strategy plugins
+        shell: pwsh
+        env:
+          NUGET_TOKEN: ${{ secrets.NUGET_GITHUB_TOKEN }}
+        run: |
+          ./scripts/install-published-runtime.ps1 -Rid win-x64 -Version $env:RUNTIME_VERSION -Destination "$env:GITHUB_WORKSPACE\artifacts\publish\win-x64"
+
+      - name: Inject Auth0 into published appsettings.json
+        shell: pwsh
+        env:
+          AUTH0_DOMAIN: ${{ secrets.AUTH0_DOMAIN }}
+          AUTH0_AUDIENCE: ${{ secrets.AUTH0_AUDIENCE }}
+          AUTH0_CLAIM_NAMESPACE: ${{ secrets.AUTH0_CLAIM_NAMESPACE }}
+          AUTH0_REQUIREDROLECLAIMTYPE: ${{ secrets.AUTH0_REQUIREDROLECLAIMTYPE }}
+          AUTH0_REQUIREDROLE: ${{ secrets.AUTH0_REQUIREDROLE }}
+          AUTH0_REQUIRED_PERMISSION: ${{ secrets.AUTH0_REQUIRED_PERMISSION }}
+          SCRAPE_HEALTH_ALLOWED_API_HOSTS: ${{ secrets.SCRAPE_HEALTH_ALLOWED_API_HOSTS }}
+        run: ./scripts/merge-appsettings-auth0.ps1 -AppsettingsPath "$env:GITHUB_WORKSPACE\artifacts\publish\win-x64\appsettings.json"
+
+      - name: Publish and sign InstallerBootstrapper
+        shell: pwsh
+        env:
+          WINDOWS_CERT_BASE64: ${{ secrets.WINDOWS_CERT_BASE64 }}
+          WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+        run: |
+          dotnet publish packaging/windows/InstallerBootstrapper/InstallerBootstrapper.csproj -c Release -r win-x64 -o "$env:GITHUB_WORKSPACE\artifacts\bootstrapper\win-x64"
+          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_CERT_BASE64) -or [string]::IsNullOrWhiteSpace($env:WINDOWS_CERT_PASSWORD)) {
+            Write-Error "WINDOWS_CERT_BASE64 and WINDOWS_CERT_PASSWORD are required."
+            exit 1
+          }
+          New-Item -ItemType Directory -Force -Path "$env:GITHUB_WORKSPACE\artifacts\signing" | Out-Null
+          $pfxPath = "$env:GITHUB_WORKSPACE\artifacts\signing\vardyparty.pfx"
+          [IO.File]::WriteAllBytes($pfxPath, [Convert]::FromBase64String($env:WINDOWS_CERT_BASE64))
+          $signtool = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin" -Recurse -Filter signtool.exe |
+            Where-Object { $_.FullName -match '\\x64\\signtool\.exe$' } |
+            Sort-Object FullName -Descending | Select-Object -First 1
+          & $signtool.FullName sign /fd SHA256 /f $pfxPath /p $env:WINDOWS_CERT_PASSWORD "$env:GITHUB_WORKSPACE\artifacts\bootstrapper\win-x64\InstallerBootstrapper.exe"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Build and sign MSIX
+        shell: pwsh
+        env:
+          WINDOWS_CERT_BASE64: ${{ secrets.WINDOWS_CERT_BASE64 }}
+          WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+        run: |
+          $numeric = ($env:RUNTIME_VERSION -split '[-+]')[0]
+          $parts = $numeric.Split('.')
+          $major = if ($parts.Length -ge 1) { [int]$parts[0] } else { 1 }
+          $minor = if ($parts.Length -ge 2) { [int]$parts[1] } else { 0 }
+          $build = if ($parts.Length -ge 3) { [int]$parts[2] } else { 0 }
+          $revision = if ($parts.Length -ge 4) { [int]$parts[3] } else { 0 }
+          $msixVersion = "$major.$minor.$build.$revision"
+
+          $layoutRoot = "$env:GITHUB_WORKSPACE\artifacts\msix-layout"
+          $appRoot = "$layoutRoot\VardyParty.LocalService"
+          New-Item -ItemType Directory -Force -Path $appRoot, "$layoutRoot\Assets" | Out-Null
+          Copy-Item "$env:GITHUB_WORKSPACE\artifacts\publish\win-x64\*" $appRoot -Recurse -Force
+          Copy-Item "$env:GITHUB_WORKSPACE\packaging\windows\VardyParty.LocalService.Package\Assets\*" "$layoutRoot\Assets" -Recurse -Force
+          Copy-Item "$env:GITHUB_WORKSPACE\artifacts\bootstrapper\win-x64\InstallerBootstrapper.exe" "$layoutRoot\InstallerBootstrapper.exe" -Force
+          [xml]$manifest = Get-Content "$env:GITHUB_WORKSPACE\packaging\windows\VardyParty.LocalService.Package\Package.appxmanifest"
+          $manifest.Package.Identity.Version = $msixVersion
+          $manifest.Save("$layoutRoot\AppxManifest.xml")
+
+          $makeappx = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin" -Recurse -Filter makeappx.exe |
+            Where-Object { $_.FullName -match '\\x64\\makeappx\.exe$' } |
+            Sort-Object FullName -Descending | Select-Object -First 1
+          $outputDir = "$env:GITHUB_WORKSPACE\artifacts\installers"
+          New-Item -ItemType Directory -Force -Path $outputDir | Out-Null
+          $msixPath = "$outputDir\VardyParty.LocalService-win-x64.msix"
+          & $makeappx.FullName pack /d $layoutRoot /p $msixPath /o
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          $pfxPath = "$env:GITHUB_WORKSPACE\artifacts\signing\vardyparty.pfx"
+          $signtool = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin" -Recurse -Filter signtool.exe |
+            Where-Object { $_.FullName -match '\\x64\\signtool\.exe$' } |
+            Sort-Object FullName -Descending | Select-Object -First 1
+          & $signtool.FullName sign /fd SHA256 /f $pfxPath /p $env:WINDOWS_CERT_PASSWORD $msixPath
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $cert = [Security.Cryptography.X509Certificates.X509Certificate2]::new($pfxPath, $env:WINDOWS_CERT_PASSWORD)
+          [IO.File]::WriteAllBytes("$outputDir\vardyparty.cer", $cert.Export([Security.Cryptography.X509Certificates.X509ContentType]::Cert))
+
+      - name: Upload Windows installer artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-installers
+          path: |
+            ${{ github.workspace }}\artifacts\installers\*.msix
+            ${{ github.workspace }}\artifacts\installers\*.cer
+          retention-days: 2
+
+  package-linux-snap:
+    name: Package Linux (${{ matrix.rid }})
+    needs: guard
+    if: github.repository == 'Vardy-Party/M3U8-resolver' && needs.guard.outputs.should_release == 'true'
+    runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.rid == 'linux-arm64' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - rid: linux-x64
+            os: ubuntu-24.04
+            snap_arch: amd64
+            lib_multiarch: x86_64-linux-gnu
+            artifact: linux-installers-amd64
+          - rid: linux-arm64
+            os: ubuntu-24.04-arm
+            snap_arch: arm64
+            lib_multiarch: aarch64-linux-gnu
+            artifact: linux-installers-arm64
+    env:
+      SNAP_ARCH: ${{ matrix.snap_arch }}
+      LIB_MULTIARCH: ${{ matrix.lib_multiarch }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install published runtime and Strategy plugins
+        shell: pwsh
+        env:
+          NUGET_TOKEN: ${{ secrets.NUGET_GITHUB_TOKEN }}
+        run: ./scripts/install-published-runtime.ps1 -Rid ${{ matrix.rid }} -Version $env:RUNTIME_VERSION -Destination "${{ github.workspace }}/artifacts/publish/${{ matrix.rid }}"
+
+      - name: Inject Auth0 into published appsettings.json
+        shell: pwsh
+        env:
+          AUTH0_DOMAIN: ${{ secrets.AUTH0_DOMAIN }}
+          AUTH0_AUDIENCE: ${{ secrets.AUTH0_AUDIENCE }}
+          AUTH0_CLAIM_NAMESPACE: ${{ secrets.AUTH0_CLAIM_NAMESPACE }}
+          AUTH0_REQUIREDROLECLAIMTYPE: ${{ secrets.AUTH0_REQUIREDROLECLAIMTYPE }}
+          AUTH0_REQUIREDROLE: ${{ secrets.AUTH0_REQUIREDROLE }}
+          AUTH0_REQUIRED_PERMISSION: ${{ secrets.AUTH0_REQUIRED_PERMISSION }}
+          SCRAPE_HEALTH_ALLOWED_API_HOSTS: ${{ secrets.SCRAPE_HEALTH_ALLOWED_API_HOSTS }}
+        run: ./scripts/merge-appsettings-auth0.ps1 -AppsettingsPath "${{ github.workspace }}/artifacts/publish/${{ matrix.rid }}/appsettings.json"
+
+      - name: Stamp snap version
+        shell: bash
+        run: |
+          set -euo pipefail
+          sed -i -E "s/^version: \".*\"/version: \"${RUNTIME_VERSION}\"/" snap/snapcraft.yaml
+          sed -i -E "s/build-on: \\[amd64\\]/build-on: [${SNAP_ARCH}]/" snap/snapcraft.yaml
+          sed -i -E "s/x86_64-linux-gnu/${LIB_MULTIARCH}/g" snap/snapcraft.yaml
+          grep -q "build-on: \[${SNAP_ARCH}\]" snap/snapcraft.yaml
+          grep -q "LD_LIBRARY_PATH:.*${LIB_MULTIARCH}" snap/snapcraft.yaml
+
+      - name: Prepare Snap source payload
+        run: |
+          mkdir -p "${{ github.workspace }}/snap/local-service"
+          rm -rf ${{ github.workspace }}/snap/local-service/*
+          cp -R "${{ github.workspace }}/artifacts/publish/${{ matrix.rid }}/." "${{ github.workspace }}/snap/local-service/"
+          chmod +x "${{ github.workspace }}/snap/local-service/VardyParty.LocalService"
+
+      - name: Build Snap
+        id: snapcraft
+        uses: snapcore/action-build@v1
+        with:
+          path: snap
+
+      - name: Collect Snap artifact
+        run: |
+          mkdir -p "${{ github.workspace }}/artifacts/installers"
+          cp "${{ steps.snapcraft.outputs.snap }}" "${{ github.workspace }}/artifacts/installers/"
+
+      - name: Upload Linux installer artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ github.workspace }}/artifacts/installers/*
+          retention-days: 2
+
+  package-macos:
+    name: Package macOS
+    needs: guard
+    if: github.repository == 'Vardy-Party/M3U8-resolver' && needs.guard.outputs.should_release == 'true'
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install published runtime and Strategy plugins
+        shell: pwsh
+        env:
+          NUGET_TOKEN: ${{ secrets.NUGET_GITHUB_TOKEN }}
+        run: ./scripts/install-published-runtime.ps1 -Rid osx-x64 -Version $env:RUNTIME_VERSION -Destination "${{ github.workspace }}/artifacts/publish/osx-x64"
+
+      - name: Inject Auth0 into published appsettings.json
+        shell: pwsh
+        env:
+          AUTH0_DOMAIN: ${{ secrets.AUTH0_DOMAIN }}
+          AUTH0_AUDIENCE: ${{ secrets.AUTH0_AUDIENCE }}
+          AUTH0_CLAIM_NAMESPACE: ${{ secrets.AUTH0_CLAIM_NAMESPACE }}
+          AUTH0_REQUIREDROLECLAIMTYPE: ${{ secrets.AUTH0_REQUIREDROLECLAIMTYPE }}
+          AUTH0_REQUIREDROLE: ${{ secrets.AUTH0_REQUIREDROLE }}
+          AUTH0_REQUIRED_PERMISSION: ${{ secrets.AUTH0_REQUIRED_PERMISSION }}
+          SCRAPE_HEALTH_ALLOWED_API_HOSTS: ${{ secrets.SCRAPE_HEALTH_ALLOWED_API_HOSTS }}
+        run: ./scripts/merge-appsettings-auth0.ps1 -AppsettingsPath "${{ github.workspace }}/artifacts/publish/osx-x64/appsettings.json"
+
+      - name: Package macOS artifact
+        run: |
+          mkdir -p "${{ github.workspace }}/artifacts/installers"
+          tar -czf "${{ github.workspace }}/artifacts/installers/VardyParty.LocalService-osx-x64.tar.gz" -C "${{ github.workspace }}/artifacts/publish/osx-x64" .
+
+      - name: Upload macOS artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: macos-installers
+          path: ${{ github.workspace }}/artifacts/installers/*
+          retention-days: 2
+
+  create-github-release:
+    name: Create GitHub Release
+    needs:
+      - guard
+      - package-windows-msix
+      - package-linux-snap
+      - package-macos
+    if: |
+      always() &&
+      github.repository == 'Vardy-Party/M3U8-resolver' &&
+      needs.guard.outputs.should_release == 'true' &&
+      needs.package-windows-msix.result == 'success' &&
+      needs.package-macos.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download Windows installers
+        uses: actions/download-artifact@v8
+        with:
+          name: windows-installers
+          path: release-assets/windows
+
+      - name: Download Linux installers
+        if: needs.package-linux-snap.result == 'success'
+        uses: actions/download-artifact@v8
+        with:
+          pattern: linux-installers-*
+          path: release-assets/linux
+          merge-multiple: true
+
+      - name: Download macOS installers
+        uses: actions/download-artifact@v8
+        with:
+          name: macos-installers
+          path: release-assets/macos
+
+      - name: Stage assets
+        id: meta
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          VERSION="${RUNTIME_VERSION}"
+          TAG="v${VERSION}"
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            echo "::error::${TAG} already exists."
+            exit 1
+          fi
+          mkdir -p release-dist
+          shopt -s nullglob
+          for f in release-assets/windows/* release-assets/linux/* release-assets/macos/*; do
+            base="$(basename "$f")"
+            case "$base" in
+              *.tar.gz) out="${base%.tar.gz}-${VERSION}.tar.gz" ;;
+              *.*) out="${base%.*}-${VERSION}.${base##*.}" ;;
+              *) out="${base}-${VERSION}" ;;
+            esac
+            cp -f "$f" "release-dist/${out}"
+          done
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: VardyParty Local Service ${{ steps.meta.outputs.version }}
+          target_commitish: main
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          body: |
+            Host binaries are the public `VardyParty.LocalService.Runtime.*` ${{ steps.meta.outputs.version }} packages from Vardy-Party/local-service.
+            Strategy plugins were restored from the private GitHub Packages feed and are only in this private release.
+            Source run: ${{ github.event.client_payload.run_url }}
+          files: release-dist/*

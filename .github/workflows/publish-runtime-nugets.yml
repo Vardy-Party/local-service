@@ -1,0 +1,157 @@
+name: Publish runtime NuGets
+
+# Public Vardy-Party/local-service only. Builds the self-contained host, strips
+# Strategy plugin DLLs, and pushes VardyParty.LocalService.Runtime.<rid> to
+# GitHub Packages. It does not create a GitHub Release and it does not sign
+# installers. M3U8-resolver turns those packages plus the private Strategy
+# plugins into the release.
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types:
+      - completed
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: publish-runtime-nugets
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  NUGET_FEED_URL: https://nuget.pkg.github.com/Vardy-Party/index.json
+
+jobs:
+  pack-runtime:
+    name: Pack runtime (${{ matrix.rid }})
+    if: |
+      github.repository == 'Vardy-Party/local-service' &&
+      (github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success')
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - rid: win-x64
+            os: windows-latest
+          - rid: linux-x64
+            os: ubuntu-24.04
+          - rid: linux-arm64
+            os: ubuntu-24.04-arm
+          - rid: osx-x64
+            os: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: global.json
+          source-url: ${{ env.NUGET_FEED_URL }}
+        env:
+          NUGET_AUTH_TOKEN: ${{ secrets.NUGET_GITHUB_TOKEN }}
+
+      - name: Authenticate GitHub Packages (NuGet.config)
+        shell: bash
+        env:
+          NUGET_USER: ${{ secrets.NUGET_GITHUB_USERNAME }}
+          NUGET_TOKEN: ${{ secrets.NUGET_GITHUB_TOKEN }}
+        run: |
+          if [ -z "${NUGET_TOKEN}" ]; then
+            echo "::error::NUGET_GITHUB_TOKEN is required so the build can restore private Strategy plugins. The plugins are not packed into the nupkg."
+            exit 1
+          fi
+          USERNAME="${NUGET_USER:-x-access-token}"
+          dotnet nuget update source github-vardy-party \
+            --username "${USERNAME}" \
+            --password "${NUGET_TOKEN}" \
+            --store-password-in-clear-text \
+            --configfile NuGet.config
+
+      - name: Publish ${{ matrix.rid }}
+        run: dotnet publish VardyParty.LocalService/VardyParty.LocalService.csproj -c Release -r ${{ matrix.rid }} --self-contained true -o ${{ github.workspace }}/artifacts/publish/${{ matrix.rid }}
+
+      - name: Pack runtime nupkg without Strategy plugins
+        shell: pwsh
+        run: |
+          . ./.github/scripts/RuntimeNuget.ps1
+          $publish = Join-Path $env:GITHUB_WORKSPACE "artifacts/publish/${{ matrix.rid }}"
+          $version = (Select-String -Path VardyParty.LocalService/VardyParty.LocalService.csproj -Pattern '<Version>([^<]+)</Version>' | Select-Object -First 1).Matches.Groups[1].Value
+          if ([string]::IsNullOrWhiteSpace($version)) { throw 'Could not read LocalService version.' }
+          Remove-StrategyPluginAssemblies -PublishDir $publish | Out-Null
+          $id = "VardyParty.LocalService.Runtime.${{ matrix.rid }}"
+          $out = Join-Path $env:GITHUB_WORKSPACE "artifacts/nuget/$id.$version.nupkg"
+          New-RuntimeNupkg -PublishDir $publish -PackageId $id -Version $version -OutputPath $out
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          Write-Host "Packed $id $version"
+
+      - name: Push runtime nupkg
+        shell: bash
+        run: |
+          dotnet nuget push "${{ github.workspace }}/artifacts/nuget/"*.nupkg \
+            --source "https://nuget.pkg.github.com/Vardy-Party/index.json" \
+            --api-key "${{ secrets.GITHUB_TOKEN }}" \
+            --skip-duplicate
+
+  dispatch-private-release:
+    name: Dispatch private release
+    needs: pack-runtime
+    if: |
+      github.repository == 'Vardy-Party/local-service' &&
+      needs.pack-runtime.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v7
+        with:
+          ref: main
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Read version
+        id: ver
+        shell: bash
+        run: |
+          VERSION="$(grep -oP '(?<=<Version>)[^<]+' VardyParty.LocalService/VardyParty.LocalService.csproj | head -n1)"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Dispatch M3U8-resolver
+        env:
+          DISPATCH_TOKEN: ${{ secrets.M3U8_RESOLVER_DISPATCH_TOKEN }}
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          set -euo pipefail
+          if [ -z "${DISPATCH_TOKEN}" ]; then
+            echo "::error::Set M3U8_RESOLVER_DISPATCH_TOKEN (contents:write on Vardy-Party/M3U8-resolver) so the private repo can package Strategy plugins and create the release."
+            exit 1
+          fi
+          curl -fsS -X POST \
+            -H "Authorization: Bearer ${DISPATCH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            https://api.github.com/repos/Vardy-Party/M3U8-resolver/dispatches \
+            -d "{\"event_type\":\"local-service-runtime-published\",\"client_payload\":{\"version\":\"${VERSION}\",\"source_sha\":\"${{ github.sha }}\",\"run_url\":\"${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}\"}}"
+
+      - name: Bump LocalService patch on main
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.ver.outputs.version }}"
+          IFS='.' read -r MAJOR MINOR PATCH REST <<< "${VERSION}"
+          NEXT_VERSION="${MAJOR:-0}.${MINOR:-0}.$(( ${PATCH:-0} + 1 ))"
+          sed -i -E "s#<Version>${VERSION}</Version>#<Version>${NEXT_VERSION}</Version>#" VardyParty.LocalService/VardyParty.LocalService.csproj
+          if [ -f snap/snapcraft.yaml ]; then
+            sed -i -E "s/^version: \".*\"/version: \"${NEXT_VERSION}\"/" snap/snapcraft.yaml
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add VardyParty.LocalService/VardyParty.LocalService.csproj snap/snapcraft.yaml
+          git commit -m "chore: bump LocalService to ${NEXT_VERSION} [skip ci]"
+          git push origin HEAD:main

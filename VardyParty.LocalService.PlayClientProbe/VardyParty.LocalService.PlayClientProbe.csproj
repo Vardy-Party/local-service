@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net11.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>VardyParty.LocalService.PlayClientProbe</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\Strategies\VardyParty.LocalService.V1.Scrape\VardyParty.LocalService.V1.Scrape.csproj" Condition="Exists('..\..\Strategies\VardyParty.LocalService.V1.Scrape\VardyParty.LocalService.V1.Scrape.csproj')" />
+    <PackageReference Include="VardyParty.LocalService.V1.Scrape" Version="0.1.19" Condition="!Exists('..\..\Strategies\VardyParty.LocalService.V1.Scrape\VardyParty.LocalService.V1.Scrape.csproj')" />
+  </ItemGroup>
+
+</Project>

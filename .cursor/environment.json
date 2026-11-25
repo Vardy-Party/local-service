@@ -1,0 +1,16 @@
+{
+  "name": "VardyParty Local Service",
+  "user": "ubuntu",
+  "install": "set -e; if [ -f .cursor/install.sh ]; then bash .cursor/install.sh; else bash repos/m3u8-resolver/.cursor/install.sh; fi; if [ -f repos/api/.cursor/install.sh ]; then bash repos/api/.cursor/install.sh; elif [ -f ../api/.cursor/install.sh ]; then bash ../api/.cursor/install.sh; fi; if [ -f repos/client/.cursor/install.sh ]; then bash repos/client/.cursor/install.sh; elif [ -f ../client/.cursor/install.sh ]; then bash ../client/.cursor/install.sh; fi",
+  "terminals": [
+    {
+      "name": "local-service",
+      "command": "if [ -f .cursor/run-service.sh ]; then bash .cursor/run-service.sh; else bash repos/m3u8-resolver/.cursor/run-service.sh; fi"
+    },
+    {
+      "name": "api-dev",
+      "command": "if [ -f repos/api/.cursor/run-dev.sh ]; then bash repos/api/.cursor/run-dev.sh; elif [ -f ../api/.cursor/run-dev.sh ]; then bash ../api/.cursor/run-dev.sh; else echo 'api repo not present in this workspace; skipping API preview worker.'; fi"
+    }
+  ],
+  "ports": [5019, 8787]
+}

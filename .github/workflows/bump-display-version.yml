@@ -1,0 +1,136 @@
+name: Bump Display Version
+
+# LocalService SemVer (<Version> in the csproj) is a release decision — do not
+# bump it in product PRs. Run this from Actions when you want a new GitHub
+# Release number (e.g. 1.1.17 → 1.1.18). After the bump lands on main, CI runs
+# and Main Packaging creates tag v{Version}. When that tag is new, packaging
+# then auto-bumps patch on main with [skip ci] for the *next* release.
+#
+# Use this when the current Version already has a tag (packaging would soft-skip)
+# and you need a new version quoted on the download page.
+#
+# Commits directly to main (same as the post-release patch bump). Do not open a
+# PR — GITHUB_TOKEN cannot create PRs unless the repo setting is enabled, and
+# that path was failing red around releases.
+on:
+  workflow_dispatch:
+    inputs:
+      version_bump_type:
+        description: 'LocalService Version bump type'
+        required: true
+        default: 'patch'
+        type: choice
+        options:
+          - major
+          - minor
+          - patch
+
+concurrency:
+  group: bump-display-main
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  bump-display-version:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v7
+        with:
+          ref: main
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Read current version
+        id: read-version
+        run: |
+          set -euo pipefail
+          CSPROJ="VardyParty.LocalService/VardyParty.LocalService.csproj"
+          VERSION="$(grep -oP '(?<=<Version>)[^<]+' "${CSPROJ}" | head -n1)"
+          if [[ -z "${VERSION}" ]]; then
+            echo "::error::Could not read <Version> from ${CSPROJ}"
+            exit 1
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "::notice::Current LocalService Version ${VERSION}"
+
+      - name: Parse and bump version
+        id: bump-version
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.read-version.outputs.version }}"
+          BUMP_TYPE="${{ github.event.inputs.version_bump_type }}"
+
+          IFS='.' read -ra PARTS <<< "${VERSION}"
+          MAJOR="${PARTS[0]:-0}"
+          MINOR="${PARTS[1]:-0}"
+          PATCH="${PARTS[2]:-0}"
+
+          case "${BUMP_TYPE}" in
+            major)
+              MAJOR=$((MAJOR + 1))
+              MINOR=0
+              PATCH=0
+              ;;
+            minor)
+              MINOR=$((MINOR + 1))
+              PATCH=0
+              ;;
+            patch)
+              PATCH=$((PATCH + 1))
+              ;;
+            *)
+              echo "::error::Unknown bump type ${BUMP_TYPE}"
+              exit 1
+              ;;
+          esac
+
+          NEW_VERSION="${MAJOR}.${MINOR}.${PATCH}"
+          echo "version=${NEW_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "::notice::LocalService Version ${VERSION} → ${NEW_VERSION} (${BUMP_TYPE})"
+
+      - name: Update csproj and snapcraft.yaml
+        run: |
+          set -euo pipefail
+          OLD="${{ steps.read-version.outputs.version }}"
+          NEW="${{ steps.bump-version.outputs.version }}"
+          CSPROJ="VardyParty.LocalService/VardyParty.LocalService.csproj"
+          SNAPYAML="snap/snapcraft.yaml"
+
+          sed -i -E "s#<Version>${OLD}</Version>#<Version>${NEW}</Version>#" "${CSPROJ}"
+          if ! grep -q "<Version>${NEW}</Version>" "${CSPROJ}"; then
+            echo "::error::Failed to bump ${CSPROJ} to ${NEW}"
+            exit 1
+          fi
+
+          if grep -qE '^version: "' "${SNAPYAML}"; then
+            sed -i -E "s/^version: \".*\"/version: \"${NEW}\"/" "${SNAPYAML}"
+          else
+            echo "::error::Could not find version: \"…\" in ${SNAPYAML}"
+            exit 1
+          fi
+          if ! grep -qE "^version: \"${NEW}\"" "${SNAPYAML}"; then
+            echo "::error::Failed to bump ${SNAPYAML} to ${NEW}"
+            exit 1
+          fi
+
+      - name: Commit and push to main
+        env:
+          NEW_VERSION: ${{ steps.bump-version.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+
+          # No skip-ci token — CI must run so Main Packaging starts via workflow_run.
+          # Do not also dispatch Main Packaging here; that raced the workflow_run
+          # trigger and cancelled sibling packaging runs (grey/red on Actions).
+          TITLE="ci: bump LocalService Version to ${NEW_VERSION}"
+          git add VardyParty.LocalService/VardyParty.LocalService.csproj snap/snapcraft.yaml
+          git commit -m "${TITLE}"
+          git push origin HEAD:main
+
+          echo "::notice::LocalService Version ${NEW_VERSION} is on main; CI → Main Packaging will create v${NEW_VERSION}"

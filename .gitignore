@@ -1,0 +1,27 @@
+## Build outputs
+bin/
+obj/
+
+## Playwright browsers (downloaded at first run, not committed)
+browsers/
+
+## User-specific settings
+*.user
+*.suo
+.vs/
+.vscode/
+
+## Local secrets (never commit)
+.env
+VardyParty.LocalService/appsettings.Local.json
+
+## Local config overrides (put secrets / local URLs here)
+appsettings.Local.json
+
+## OS
+.DS_Store
+Thumbs.db
+/artifacts
+
+## Local-only NuGet sources for unreleased Strategies packs (see DEVELOPMENT.md)
+NuGet.local.config
