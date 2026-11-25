@@ -54,9 +54,6 @@ jobs:
         uses: actions/setup-dotnet@v6
         with:
           global-json-file: global.json
-          source-url: ${{ env.NUGET_FEED_URL }}
-        env:
-          NUGET_AUTH_TOKEN: ${{ secrets.NUGET_GITHUB_TOKEN }}
 
       - name: Authenticate GitHub Packages (NuGet.config)
         shell: bash
