@@ -95,7 +95,7 @@ PlayWireResult wire;
 try
 {
     wire = useMp
-        ? await CallMpAsync(localServiceHttp, baseUrl, pageUrl, stream)
+        ? await CallV2Async(localServiceHttp, baseUrl, pageUrl, stream)
         : await CallPlayAsync(localServiceHttp, baseUrl, pageUrl, stream);
 }
 catch (Exception ex)
@@ -174,19 +174,49 @@ static async Task<PlayWireResult> CallPlayAsync(HttpClient http, string baseUrl,
     return ParseWire((int)response.StatusCode, json);
 }
 
-static async Task<PlayWireResult> CallMpAsync(HttpClient http, string baseUrl, string pageUrl, string? stream)
+static async Task<PlayWireResult> CallV2Async(HttpClient http, string baseUrl, string pageUrl, string? stream)
 {
-    var path = $"{baseUrl.TrimEnd('/')}/mp";
+    var path = $"{baseUrl.TrimEnd('/')}/v2";
     var payload = JsonSerializer.Serialize(new
     {
         pageUrl,
         stream = string.IsNullOrWhiteSpace(stream) ? null : stream,
-        streamResults = false
+        streamResults = true
     });
     using var content = new StringContent(payload, Encoding.UTF8, "application/json");
-    using var response = await http.PostAsync(path, content);
-    var json = await response.Content.ReadAsStringAsync();
-    return ParseWire((int)response.StatusCode, json);
+    using var request = new HttpRequestMessage(HttpMethod.Post, path) { Content = content };
+    request.Headers.TryAddWithoutValidation("X-Vardy-Mp-Stream", "1");
+    request.Headers.Accept.ParseAdd("application/x-ndjson");
+    using var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
+    var status = (int)response.StatusCode;
+    PlayWireResult? playlist = null;
+    using var reader = new StreamReader(await response.Content.ReadAsStreamAsync());
+    while (true)
+    {
+        var line = await reader.ReadLineAsync();
+        if (line is null)
+        {
+            break;
+        }
+
+        if (string.IsNullOrWhiteSpace(line))
+        {
+            continue;
+        }
+
+        var parsed = ParseWire(status, line);
+        if (line.Contains("\"type\":\"error\"", StringComparison.OrdinalIgnoreCase) || line.Contains("\"type\": \"error\"", StringComparison.Ordinal))
+        {
+            return parsed;
+        }
+
+        if (!string.IsNullOrWhiteSpace(parsed.Url))
+        {
+            playlist = parsed;
+        }
+    }
+
+    return playlist ?? new PlayWireResult(status, null, "no playlist event", null, null, null);
 }
 
 static PlayWireResult ParseWire(int status, string json)
@@ -326,7 +356,7 @@ static void PrintHelp()
             [--cookie "session_token=eyJ...; refresh_token=..."]
 
         Env:
-          VARDY_COOKIE / SESSION_TOKEN   Auth0 access JWT (same as MpClientProbe)
+          VARDY_COOKIE / SESSION_TOKEN   Auth0 access JWT (same as V2ClientProbe)
           LOCAL_SERVICE_BASE             default http://127.0.0.1:5019
           VARDYPARTY_LOOPBACK_AUTH_BYPASS=1 on LocalService skips JWT for loopback probes
 

@@ -24,9 +24,7 @@
     <Project Path="packaging/windows/InstallerBootstrapper/InstallerBootstrapper.csproj" />
     <Project Path="VardyParty.LocalService.Client/VardyParty.LocalService.Client.csproj" />
     <Project Path="VardyParty.LocalService.MpClientProbe/VardyParty.LocalService.MpClientProbe.csproj" />
-    <Project Path="VardyParty.LocalService.PlayClientProbe/VardyParty.LocalService.PlayClientProbe.csproj" />
     <Project Path="VardyParty.LocalService.TestClient/VardyParty.LocalService.TestClient.csproj" />
     <Project Path="VardyParty.LocalService.Tests/VardyParty.LocalService.Tests.csproj" />
     <Project Path="VardyParty.LocalService/VardyParty.LocalService.csproj" />
-    <Project Path="tools/FctvHls/FctvHls.csproj" />
 </Solution>

@@ -246,9 +246,7 @@ Without Domain/Audience the host refuses to start (except `Testing` with auth by
 
 ### Release packaging (MSIX / Snap / macOS)
 
-`Main Packaging` merges Auth0 into `VardyParty.LocalService/appsettings.json` **before**
-`dotnet publish` (same approach as Client CD). Values come from Actions secrets — never
-commit real Domain/Audience to source.
+Installer packaging, Auth0 injection, and signing run in M3U8-resolver from the published host packages and the Strategies packages. This repo does not hold those secrets and does not create the GitHub Release. Values are applied to the published `appsettings.json` at release time — never commit real Domain/Audience to source.
 
 | Secret | Required | Notes |
 | --- | --- | --- |
@@ -268,7 +266,7 @@ copy .env.example .env   # fill Auth0 (+ scrape-health hosts + optional signing 
 pwsh scripts/sync-github-secrets-from-env.ps1
 ```
 
-Then re-run **Main Packaging**.
+Then run **Release from public runtime** on M3U8-resolver.
 
 ### Local from-source Auth0
 
@@ -299,7 +297,7 @@ Offline local release (Actions paused): `pwsh ./scripts/build-local-release.ps1`
 Builds and publishes:
 - Strategies NuGet → GitHub Packages (`dotnet nuget push`; PAT needs `write:packages`)
 - LocalService Windows MSIX + Pi arm64 snap → R2 `vardyparty-installers` **and** a
-  GitHub Release on this repo
+  GitHub Release on M3U8-resolver
 - Client Windows MSIX + Android APK → GitHub Release on Client (`/releases/latest`)
   + R2 `client-release-latest.json` snapshot
 
@@ -311,7 +309,7 @@ Needs siblings `Strategies`, `VardyParty-Client`, `VardyParty-API` (for `wrangle
 Windows SDK, WSL+snapcraft for Pi (`-SkipPi` to skip), `.env` Auth0 +
 `NUGET_GITHUB_TOKEN`, Client `certs/vardyparty.pfx`. Outputs under
 `artifacts/local-release/<timestamp>/`. When Actions returns, official CD with a
-higher version supersedes Client latest; re-run Main Packaging for R2 helpers.
+higher version supersedes Client latest; re-run the M3U8-resolver release for R2 helpers.
 (`build-release-msix-pair.ps1` forwards here.)
 
 ## Troubleshooting
@@ -405,33 +403,25 @@ netstat -ano | findstr :PORT_NUMBER
 
 See [README.md](./README.md) for service installation on production systems.
 
-For release packaging, see [ci.yml](.github/workflows/ci.yml) and [main-packaging.yml](.github/workflows/main-packaging.yml).
+This repo does not build installers. CI is [ci.yml](.github/workflows/ci.yml). Host packages are [publish-runtime-nugets.yml](.github/workflows/publish-runtime-nugets.yml). Installer releases are cut from those packages in M3U8-resolver.
 
-## Versioning and GitHub Releases
+## Versioning
 
 **Source of truth:** `<Version>` in `VardyParty.LocalService/VardyParty.LocalService.csproj`.
-Installer pipelines (MSIX / Snap stamp / release tag) all read that value. Do not bump it in feature PRs unless you intentionally want a minor/major jump.
+The runtime NuGet version is that value. This repo does not create a GitHub Release.
 
-**Ship a new version number (same idea as Client “Bump Display Version”):**
+**Ship a new version number:**
 
 1. Actions → **Bump Display Version** → Run workflow on `main` → choose major / minor / **patch**.
-2. The workflow bumps the csproj and `snap/snapcraft.yaml` and pushes straight to `main` (no PR — Actions cannot create PRs with the default token). That push runs **CI**, which starts **Main Packaging** via `workflow_run` (do not also dispatch packaging by hand — that cancels/duplicates the run).
-3. Packaging creates GitHub Release `v{Version}`. When the tag is **new**, it then auto-bumps patch on `main` with `[skip ci]` for the *next* cycle.
-4. If the current Version already has a tag, Main Packaging **soft-skips** (green, no packages). Run Bump Display Version first when you need a new number on the download page.
+2. The workflow bumps the csproj and `snap/snapcraft.yaml` and pushes straight to `main`. Branch protection on this repo rejects that direct push, so land the version change through a pull request when the push is blocked.
+3. CI on `main` builds and tests. **Publish runtime NuGets** then pushes `VardyParty.LocalService.Runtime.<rid>`.
 
-**Scheme (product merges while Version is already ahead of the latest tag):**
-
-1. Merge a PR to `main` → CI runs → on success, Main Packaging builds Windows/Linux/macOS installers.
-2. The `Create GitHub Release` job attaches those artifacts to a GitHub Release tagged `v{Version}` (e.g. `v1.0.6`).
-3. If that tag did not already exist, the same job bumps the **patch** (`1.0.6` → `1.0.7`), updates `snap/snapcraft.yaml` to match, and pushes a commit whose message includes the skip-ci directive to `main` so the next merge releases the next number (no double-bump on packaging re-runs).
-
-> **Caution:** Do not put the bracketed skip-ci token in PR titles, PR bodies, or squash/merge commit messages. If that token appears in any commit message on a push, GitHub skips **all** Actions for the push — CI never runs, and Main Packaging (triggered after CI) never starts. Only the automated post-release bump commit should use that token.
+> **Caution:** Do not put the bracketed skip-ci token in PR titles, PR bodies, or squash/merge commit messages. If that token appears in any commit message on a push, GitHub skips **all** Actions for the push.
 
 
 `VardyParty.LocalService.Client` keeps its own NuGet version and publishes separately when Client files change on `main` (see CI). It is not coupled to LocalService release numbering. CI pushes with `--skip-duplicate`, so **bump `<Version>` in `VardyParty.LocalService.Client.csproj` whenever the package contents change** (including its target frameworks); otherwise the push is silently skipped and the feed keeps the old build. 0.5.0 targets `net11.0` and `netstandard2.1`.
 
 **One-time setup**
 
-- Workflow `permissions.contents: write` (already set in Main Packaging and Bump Display Version) so `GITHUB_TOKEN` can create tags/releases and push bump commits to `main`.
-- If `main` is branch-protected, allow `github-actions[bot]` (or a PAT stored as a secret and used for checkout/push) to push version-bump commits.
-- Optional: create tag `v1.0.6` manually only if you need a historical Release before the next packaging run; otherwise the first successful Main Packaging after merge creates it.
+- `NUGET_GITHUB_TOKEN` with `read:packages` so CI can restore the host's package references. Strategy plugin assemblies are not included in the published nupkg.
+- Workflow `permissions.packages: write` on **Publish runtime NuGets** so `GITHUB_TOKEN` can push the host packages. This repo does not create tags or GitHub Releases.

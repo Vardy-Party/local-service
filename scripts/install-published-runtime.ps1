@@ -33,18 +33,17 @@ try {
     if (Test-Path -LiteralPath $Destination) { Remove-Item -LiteralPath $Destination -Recurse -Force }
     Expand-RuntimeNupkg -Nupkg $runtimeNupkg -Destination $Destination
 
-    $depsPath = Join-Path $Destination 'VardyParty.LocalService.deps.json'
-    $deps = Get-Content -LiteralPath $depsPath -Raw | ConvertFrom-Json
-    $plugins = @(Get-StrategyPluginPackages -DepsPath $depsPath)
-    if ($plugins.Count -eq 0) { throw "Runtime nupkg deps.json has no strategy packages." }
+    $manifestPath = Join-Path $PSScriptRoot '..' 'packaging' 'strategy-plugins.json'
+    $plugins = @(Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json)
+    if ($plugins.Count -eq 0) { throw "No strategy plugins listed in $manifestPath." }
 
     foreach ($plugin in $plugins) {
-        $pluginNupkg = Join-Path $work "$($plugin.Id).$($plugin.Version).nupkg"
-        Save-GitHubNuGetPackage -Id $plugin.Id -Version $plugin.Version -OutFile $pluginNupkg -Token $env:NUGET_TOKEN
-        $names = @(Get-PluginAssemblyNames -Deps $deps -PackageKeys @($plugin.Key))
-        if ($names.Count -eq 0) { throw "No runtime assemblies listed for $($plugin.Id)." }
+        $pluginNupkg = Join-Path $work "$($plugin.id).$($plugin.version).nupkg"
+        Save-GitHubNuGetPackage -Id $plugin.id -Version $plugin.version -OutFile $pluginNupkg -Token $env:NUGET_TOKEN
+        $names = @(Get-NupkgLibAssemblyNames -Nupkg $pluginNupkg)
+        if ($names.Count -eq 0) { throw "No lib assemblies in $($plugin.id)." }
         Add-PluginAssemblies -PublishDir $Destination -PluginNupkg $pluginNupkg -AssemblyNames $names
-        Write-Host "Restored $($plugin.Id) $($plugin.Version): $($names -join ', ')"
+        Write-Host "Restored $($plugin.id) $($plugin.version): $($names -join ', ')"
     }
 }
 finally {

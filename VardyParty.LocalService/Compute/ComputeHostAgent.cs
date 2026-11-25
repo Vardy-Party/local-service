@@ -12,7 +12,7 @@ namespace VardyParty.LocalService.Compute;
 
 /// <summary>
 /// Dials the compute relay as the host. Browser CONNECT calls during a relayed
-/// /mp or /play are satisfied by the paired phone.
+/// /v2 or /play are satisfied by the paired phone.
 /// </summary>
 public sealed class ComputeHostAgent(
     DiscoveryRuntimeState runtime,
@@ -404,7 +404,7 @@ public sealed class ComputeHostAgent(
         }
         finally
         {
-            // Socket is gone (or stopping). Stop /mp so Chrome does not keep
+            // Socket is gone (or stopping). Stop /v2 so Chrome does not keep
             // harvesting for a guest that can no longer receive rpc-part.
             AbortInFlightCompute(_computeRun);
             try
@@ -445,10 +445,10 @@ public sealed class ComputeHostAgent(
             method = frame.TryGetProperty("method", out var methodEl) ? methodEl.GetString() ?? "GET" : "GET";
             path = frame.TryGetProperty("path", out var pathEl) ? pathEl.GetString() ?? "" : "";
             if (method is not ("GET" or "POST")
-                || (!path.StartsWith("/mp", StringComparison.OrdinalIgnoreCase)
+                || (!path.StartsWith("/v2", StringComparison.OrdinalIgnoreCase)
                     && !path.StartsWith("/play/", StringComparison.OrdinalIgnoreCase)))
             {
-                await ReportAsync(socket, cid, "warning", "Rejected a path that is not /mp or /play", cancellationToken).ConfigureAwait(false);
+                await ReportAsync(socket, cid, "warning", "Rejected a path that is not /v2 or /play", cancellationToken).ConfigureAwait(false);
                 await SendTextAsync(socket, new { t = "rpc-result", id, cid, method, path, status = 400, body = """{"error":"path is not a compute call"}""" }, cancellationToken)
                     .ConfigureAwait(false);
                 return;
@@ -483,10 +483,10 @@ public sealed class ComputeHostAgent(
                 .ConfigureAwait(false);
             var status = (int)response.StatusCode;
             var contentType = response.Content.Headers.ContentType?.MediaType;
-            if (MpNdjsonRelay.IsNdjson(contentType))
+            if (V2NdjsonRelay.IsNdjson(contentType))
             {
                 await using var stream = await response.Content.ReadAsStreamAsync(call.Token).ConfigureAwait(false);
-                await foreach (var line in MpNdjsonRelay.ReadLinesAsync(stream, call.Token).ConfigureAwait(false))
+                await foreach (var line in V2NdjsonRelay.ReadLinesAsync(stream, call.Token).ConfigureAwait(false))
                 {
                     await pipe.SendTextAsync(new { t = "rpc-part", id, cid, method, path, status, body = line }, call.Token)
                         .ConfigureAwait(false);
@@ -885,7 +885,7 @@ public sealed class ComputeHostAgent(
     }
 
     /// <summary>
-    /// Cancel the in-flight localhost <c>/mp</c> when the host socket is gone.
+    /// Cancel the in-flight localhost <c>/v2</c> when the host socket is gone.
     /// Without this, Chrome keeps clicking chips after the phone has left.
     /// </summary>
     internal static void AbortInFlightCompute(CancellationTokenSource? computeRun) =>

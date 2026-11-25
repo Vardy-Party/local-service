@@ -5,7 +5,7 @@ using VardyParty.LocalService.Compute;
 
 namespace VardyParty.LocalService.Tests;
 
-public sealed class MpStreamResponseTests
+public sealed class V2StreamResponseTests
 {
     [Fact]
     public async Task CompleteFailureAsync_BeforeWrite_ReturnsJson500()
@@ -16,7 +16,7 @@ public sealed class MpStreamResponseTests
         var jsonOptions = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
         // Act
-        var result = await MpStreamResponse.CompleteFailureAsync(http, wrote: false, jsonOptions, CancellationToken.None);
+        var result = await V2StreamResponse.CompleteFailureAsync(http, wrote: false, jsonOptions, CancellationToken.None);
 
         // Assert
         Assert.IsAssignableFrom<IStatusCodeHttpResult>(result);
@@ -30,12 +30,12 @@ public sealed class MpStreamResponseTests
         // Arrange
         var http = new DefaultHttpContext();
         http.Response.Body = new MemoryStream();
-        http.Response.ContentType = MpNdjsonRelay.ContentType;
+        http.Response.ContentType = V2NdjsonRelay.ContentType;
         var jsonOptions = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
         await http.Response.WriteAsync("""{"type":"chips"}""" + "\n");
 
         // Act
-        var result = await MpStreamResponse.CompleteFailureAsync(http, wrote: true, jsonOptions, CancellationToken.None);
+        var result = await V2StreamResponse.CompleteFailureAsync(http, wrote: true, jsonOptions, CancellationToken.None);
 
         // Assert
         Assert.False(result is IStatusCodeHttpResult { StatusCode: StatusCodes.Status500InternalServerError });

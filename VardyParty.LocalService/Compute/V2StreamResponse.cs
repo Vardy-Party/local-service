@@ -1,5 +1,4 @@
 using System.Text.Json;
-using VardyParty.LocalService.Abstractions.Models;
 
 namespace VardyParty.LocalService.Compute;
 
@@ -7,7 +6,7 @@ namespace VardyParty.LocalService.Compute;
 /// How <c>POST /mp</c> finishes after an exception. Once NDJSON has started,
 /// the body must stay NDJSON.
 /// </summary>
-internal static class MpStreamResponse
+internal static class V2StreamResponse
 {
     public const string ExecutionFailed = "mp play execution failed";
 
@@ -26,7 +25,7 @@ internal static class MpStreamResponse
         try
         {
             await http.Response.WriteAsync(
-                    JsonSerializer.Serialize(MpPlayEvent.Fail(500, ExecutionFailed), jsonOptions) + "\n",
+                    JsonSerializer.Serialize(new { type = "error", statusCode = 500, error = ExecutionFailed }, jsonOptions) + "\n",
                     cancellationToken)
                 .ConfigureAwait(false);
             await http.Response.Body.FlushAsync(cancellationToken).ConfigureAwait(false);

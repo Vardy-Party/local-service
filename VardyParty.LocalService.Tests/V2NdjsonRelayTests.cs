@@ -4,7 +4,7 @@ using Xunit;
 
 namespace VardyParty.LocalService.Tests;
 
-public sealed class MpNdjsonRelayTests
+public sealed class V2NdjsonRelayTests
 {
     [Fact]
     public void IsNdjson_MatchesStreamingContentType()
@@ -12,8 +12,8 @@ public sealed class MpNdjsonRelayTests
         // Arrange
         // Act
         // Assert
-        Assert.True(MpNdjsonRelay.IsNdjson("application/x-ndjson"));
-        Assert.False(MpNdjsonRelay.IsNdjson("application/json"));
+        Assert.True(V2NdjsonRelay.IsNdjson("application/x-ndjson"));
+        Assert.False(V2NdjsonRelay.IsNdjson("application/json"));
     }
 
     [Fact]
@@ -25,7 +25,7 @@ public sealed class MpNdjsonRelayTests
 
         // Act
         var lines = new List<string>();
-        await foreach (var line in MpNdjsonRelay.ReadLinesAsync(stream, CancellationToken.None))
+        await foreach (var line in V2NdjsonRelay.ReadLinesAsync(stream, CancellationToken.None))
         {
             lines.Add(line);
         }
@@ -43,7 +43,7 @@ public sealed class MpNdjsonRelayTests
         var lines = new[] { """{"type":"chips"}""", """{"type":"chip"}""" };
 
         // Act
-        var frames = MpNdjsonRelay.HostRpcSequence(lines);
+        var frames = V2NdjsonRelay.HostRpcSequence(lines);
 
         // Assert
         Assert.Equal(3, frames.Count);
@@ -59,13 +59,13 @@ public sealed class MpNdjsonRelayTests
     public async Task ReadLinesAsync_SkipsALineOverTheCap()
     {
         // Arrange
-        var huge = new string('x', MpNdjsonRelay.MaxLineLength + 8);
+        var huge = new string('x', V2NdjsonRelay.MaxLineLength + 8);
         var bytes = Encoding.UTF8.GetBytes($"{huge}\n{{\"type\":\"chip\"}}\n");
         await using var stream = new MemoryStream(bytes);
 
         // Act
         var lines = new List<string>();
-        await foreach (var line in MpNdjsonRelay.ReadLinesAsync(stream, CancellationToken.None))
+        await foreach (var line in V2NdjsonRelay.ReadLinesAsync(stream, CancellationToken.None))
         {
             lines.Add(line);
         }

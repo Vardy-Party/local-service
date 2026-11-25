@@ -1,5 +1,3 @@
-using VardyParty.LocalService.Abstractions.Models;
-
 namespace VardyParty.LocalService.Client.Models;
 
 public sealed class PlayResult
@@ -39,4 +37,10 @@ public sealed class PlayRequest
     /// Catalog <c>source</c> (<c>fb</c> / <c>mp</c>) when strategy is omitted.
     /// </summary>
     public string? Source { get; set; }
+}
+
+public sealed class PlayTimings
+{
+    public long Start { get; set; }
+    public long Total { get; set; }
 }

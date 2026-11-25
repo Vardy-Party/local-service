@@ -2,12 +2,9 @@
 #
 # local-service publishes one nupkg per RID:
 #   VardyParty.LocalService.Runtime.<rid>
-# The nupkg holds the self-contained publish output under tools/publish,
-# with Strategy plugin assemblies removed. deps.json still lists those packages.
-#
-# M3U8-resolver downloads that nupkg, copies the private Strategy plugin DLLs
-# back beside the host, then builds installers and the GitHub Release.
-# The public nupkg must never contain those DLLs.
+# The nupkg is the self-contained host. Strategy DLLs are plugins and are not
+# referenced or packed by this repo. M3U8-resolver copies them in from the
+# Strategies feed when it builds the release.
 
 Set-StrictMode -Version Latest
 
@@ -91,7 +88,7 @@ function Assert-PublishHasNoStrategyPlugins {
     $deps = Get-Content -LiteralPath $depsPath -Raw | ConvertFrom-Json
     $packages = @(Get-StrategyPluginPackages -DepsPath $depsPath)
     if ($packages.Count -eq 0) {
-        throw "deps.json in $PublishDir lists no VardyParty.LocalService.* strategy packages."
+        return
     }
     $names = @(Get-PluginAssemblyNames -Deps $deps -PackageKeys @($packages.Key))
     $left = @()
@@ -180,6 +177,25 @@ function Expand-RuntimeNupkg {
             finally { $stream.Dispose() }
         }
         if (-not $found) { throw "Nupkg has no tools/publish payload: $Nupkg" }
+    }
+    finally { $zip.Dispose() }
+}
+
+function Get-NupkgLibAssemblyNames {
+    param([Parameter(Mandatory)][string]$Nupkg)
+
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $zip = [IO.Compression.ZipFile]::OpenRead($Nupkg)
+    try {
+        $preferred = @($zip.Entries | Where-Object {
+            $name = $_.FullName.Replace('\', '/')
+            $name -like 'lib/net11.0/*.dll'
+        } | ForEach-Object { [IO.Path]::GetFileName($_.FullName) })
+        if ($preferred.Count -gt 0) { return @($preferred) }
+        return @($zip.Entries | Where-Object {
+            $name = $_.FullName.Replace('\', '/')
+            $name -like 'lib/*/*.dll'
+        } | ForEach-Object { [IO.Path]::GetFileName($_.FullName) })
     }
     finally { $zip.Dispose() }
 }

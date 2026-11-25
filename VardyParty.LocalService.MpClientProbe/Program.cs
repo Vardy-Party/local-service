@@ -5,7 +5,7 @@ using System.Text.Json;
 
 // Wire-identical to VardyParty.Streaming LocalLanPlayService POST /mp:
 //   streamResults=true, X-Vardy-Mp-Stream: 1, Accept: application/x-ndjson
-// then print each NDJSON line with timings, and simulate MpHarvestSession waits
+// then print each NDJSON line with timings, and simulate V2HarvestSession waits
 // (first unlabeled chip vs named siblings that need rewritten samples).
 
 if (args.Length == 0 || args[0] is "-h" or "--help")
@@ -184,10 +184,10 @@ using (response)
         var delta = at - previousAt;
         previousAt = at;
 
-        MpLine? ev;
+        V2Line? ev;
         try
         {
-            ev = JsonSerializer.Deserialize<MpLine>(line, jsonOpts);
+            ev = JsonSerializer.Deserialize<V2Line>(line, jsonOpts);
         }
         catch (JsonException ex)
         {
@@ -512,13 +512,13 @@ static void PrintHelp()
 
         Usage:
           # Paste both API cookies from DevTools (Cookie header on the API host)
-          dotnet run --project VardyParty.LocalService.MpClientProbe -- <match-page-url> `
+          dotnet run --project VardyParty.LocalService.V2ClientProbe -- <match-page-url> `
             --cookie "session_token=eyJ...; refresh_token=..." `
             [--base http://127.0.0.1:5019] [--stream "1X EN"]
 
           # or:
           $env:VARDY_COOKIE = "session_token=eyJ...; refresh_token=..."
-          dotnet run --project VardyParty.LocalService.MpClientProbe -- <match-page-url>
+          dotnet run --project VardyParty.LocalService.V2ClientProbe -- <match-page-url>
 
         Env:
           VARDY_COOKIE                   full Cookie header (session_token + refresh_token)
@@ -534,7 +534,7 @@ static void PrintHelp()
         """);
 }
 
-sealed class MpLine
+sealed class V2Line
 {
     public string Type { get; set; } = "";
     public int? StatusCode { get; set; }
