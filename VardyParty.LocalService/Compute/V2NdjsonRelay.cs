@@ -6,7 +6,7 @@ namespace VardyParty.LocalService.Compute;
 /// <summary>
 /// Line reader for a streaming <c>POST /mp</c> body. Each line is one JSON event.
 /// </summary>
-internal static class MpNdjsonRelay
+internal static class V2NdjsonRelay
 {
     public const string ContentType = "application/x-ndjson";
     public const string RequestHeaderName = "X-Vardy-Mp-Stream";

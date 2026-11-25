@@ -74,7 +74,7 @@ builder.Services.AddHttpClient<ScrapeHealthReporter>(client =>
     // Allowlist gates the requested base only; never follow 3xx off-host with Bearer/telemetry.
     AllowAutoRedirect = false
 });
-var mpScrapeGate = MpScrapeGate.FromEnvironment();
+var mpScrapeGate = V2ScrapeGate.FromEnvironment();
 builder.Services.AddSingleton(mpScrapeGate);
 var hostSharePath = builder.Configuration["Compute:HostSharePath"];
 if (string.IsNullOrWhiteSpace(hostSharePath))
@@ -147,7 +147,7 @@ builder.Services.AddCors(options =>
 });
 
 // ── Auth0 JWT (Client already sends Bearer via Auth0ApiTokenHandler) ───────────
-// /health stays anonymous for LAN discovery; /play and /mp require stream-viewer.
+// /health stays anonymous for LAN discovery; /play and /v2 require stream-viewer.
 var auth0Settings = LocalServiceAuthExtensions.ResolveAuth0Settings(builder.Configuration);
 builder.Services.AddLocalServiceAuth(builder.Environment, builder.Configuration, auth0Settings);
 
@@ -244,7 +244,7 @@ app.UseCors();
 app.Use(async (context, next) =>
 {
     var path = context.Request.Path.Value ?? "";
-    if (path.StartsWith("/mp", StringComparison.OrdinalIgnoreCase)
+    if (path.StartsWith("/v2", StringComparison.OrdinalIgnoreCase)
         || path.StartsWith("/play", StringComparison.OrdinalIgnoreCase))
     {
         logger.LogInformation(
@@ -299,7 +299,7 @@ app.MapGet("/health", () => Results.Ok(new
 // GET /play/{*url}?stream={name}
 // The catch-all {*url} handles encoded URLs containing colons or encoded slashes.
 // Clients should encodeURIComponent the target URL before appending it to the path.
-// Optional query: stream — select a named stream on multi-stream V1/FB pages.
+// Optional query: stream — select a named stream on multi-stream pages.
 // When stream is omitted on a multi-stream page, the first listed stream is resolved.
 app.MapGet("/play/{*url}", async (string url, string? stream, HttpContext httpContext, ScrapeHealthReporter scrapeHealth, ScrapeHealthApiBaseAllowlist scrapeHealthAllowlist, ILogger<Program> requestLogger, CancellationToken ct) =>
 {
@@ -330,11 +330,11 @@ app.MapGet("/play/{*url}", async (string url, string? stream, HttpContext httpCo
     dohTemplate = PlayDns.SuppressWhenPopProxy(dohTemplate, popProxy);
     var connectionId = ClientConnectionId(httpContext.Request);
 
-    var scrape = StrategyPlugins.Find(httpContext.RequestServices, "VardyParty.LocalService.V1.Scrape", "VardyParty.LocalService.V1.Scrape.V1ScrapePlugin");
+    var scrape = StrategyPlugins.Find(httpContext.RequestServices, "play");
     if (scrape is null)
     {
-        requestLogger.LogError("[{CorrelationId}] /play rejected from {RemoteIp}: V1 scrape plugin not registered", correlationId, remoteIp);
-        return Results.Json(new { error = "v1 scrape plugin not registered" },
+        requestLogger.LogError("[{CorrelationId}] /play rejected from {RemoteIp}: play plugin not registered", correlationId, remoteIp);
+        return Results.Json(new { error = "play plugin not registered" },
             statusCode: StatusCodes.Status500InternalServerError);
     }
 
@@ -350,14 +350,14 @@ app.MapGet("/play/{*url}", async (string url, string? stream, HttpContext httpCo
 
     try
     {
-        var result = await StrategyPlugins.ResolveV1Async(scrape, targetUrl, streamName, dohTemplate, popProxy, connectionId, ct);
+        var result = await StrategyPlugins.ResolveAsync(httpContext.RequestServices, "play", targetUrl, streamName, dohTemplate, popProxy, connectionId, ct);
         var statusCode = StrategyPlugins.StatusCodeOf(result);
         requestLogger.LogInformation("[{CorrelationId}] /play response to {RemoteIp}: status {StatusCode}", correlationId, remoteIp, statusCode);
         scrapeHealth.TryReport(
             scrapeContext,
             targetUrl,
             streamName,
-            "v1",
+            StrategyPlugins.StrategyId("play"),
             ok: !string.IsNullOrWhiteSpace(StrategyPlugins.Text(result, "Url")),
             error: StrategyPlugins.Text(result, "Error"),
             httpStatus: statusCode,
@@ -376,7 +376,7 @@ app.MapGet("/play/{*url}", async (string url, string? stream, HttpContext httpCo
             scrapeContext,
             targetUrl,
             streamName,
-            "v1",
+            StrategyPlugins.StrategyId("play"),
             ok: false,
             error: "play execution failed",
             httpStatus: StatusCodes.Status500InternalServerError,
@@ -387,11 +387,10 @@ app.MapGet("/play/{*url}", async (string url, string? stream, HttpContext httpCo
     }
 }).RequireAuthorization(StreamViewerAuthorization.PolicyName);
 
-// POST /mp
-// V2/MP match pages cannot use Playwright-launched Chromium (page wipes to about:blank).
-// This path starts installed Chrome, attaches Network-only CDP, and returns the playlist URL
-// plus iframe Referer/Origin and rewritten segment URLs for the client.
-app.MapPost("/mp", async (HostMpRequest request, HttpContext httpContext, ScrapeHealthReporter scrapeHealth, ScrapeHealthApiBaseAllowlist scrapeHealthAllowlist, ILogger<Program> requestLogger, CancellationToken ct) =>
+// POST /v2
+// Match pages that wipe a Playwright-launched browser. The v2 plugin starts
+// installed Chrome and writes one V2PlayEvent JSON line as each chip is captured.
+app.MapPost("/v2", async (HostV2Request request, HttpContext httpContext, ScrapeHealthReporter scrapeHealth, ScrapeHealthApiBaseAllowlist scrapeHealthAllowlist, ILogger<Program> requestLogger, CancellationToken ct) =>
 {
     var remoteIp = httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown";
     var correlationId = CorrelationId(httpContext.Request);
@@ -401,41 +400,41 @@ app.MapPost("/mp", async (HostMpRequest request, HttpContext httpContext, Scrape
 
     if (!mpScrapeGate.Enabled)
     {
-        requestLogger.LogInformation("[{CorrelationId}] /mp rejected from {RemoteIp}: V2/MP scrape disabled ({Env}=0)", correlationId, remoteIp, MpScrapeGate.EnvironmentVariable);
-        return Results.Json(new { error = "V2/MP scrape disabled on this local service" }, statusCode: StatusCodes.Status503ServiceUnavailable);
+        requestLogger.LogInformation("[{CorrelationId}] /v2 rejected from {RemoteIp}: v2 scrape disabled ({Env}=0)", correlationId, remoteIp, V2ScrapeGate.EnvironmentVariable);
+        return Results.Json(new { error = "v2 scrape disabled on this local service" }, statusCode: StatusCodes.Status503ServiceUnavailable);
     }
 
     if (string.IsNullOrEmpty(pageUrl))
     {
-        requestLogger.LogWarning("[{CorrelationId}] /mp request rejected from {RemoteIp}: pageUrl is required", correlationId, remoteIp);
+        requestLogger.LogWarning("[{CorrelationId}] /v2 request rejected from {RemoteIp}: pageUrl is required", correlationId, remoteIp);
         return Results.BadRequest(new { error = "pageUrl is required" });
     }
 
     if (!PopProxyHeader.TryRead(httpContext.Connection.RemoteIpAddress, httpContext.Request.Headers[PopProxyHeader.Name], out var popProxy, out var popError))
     {
-        requestLogger.LogWarning("[{CorrelationId}] /mp request rejected from {RemoteIp}: {Error}", correlationId, remoteIp, popError);
+        requestLogger.LogWarning("[{CorrelationId}] /v2 request rejected from {RemoteIp}: {Error}", correlationId, remoteIp, popError);
         return Results.BadRequest(new { error = popError });
     }
 
     if (!PlayDns.TryReadTemplate(httpContext.Request, out var dohTemplate, out var dohError))
     {
-        requestLogger.LogWarning("[{CorrelationId}] /mp request rejected from {RemoteIp}: {Error}", correlationId, remoteIp, dohError);
+        requestLogger.LogWarning("[{CorrelationId}] /v2 request rejected from {RemoteIp}: {Error}", correlationId, remoteIp, dohError);
         return Results.BadRequest(new { error = dohError });
     }
 
     dohTemplate = PlayDns.SuppressWhenPopProxy(dohTemplate, popProxy);
     var connectionId = ClientConnectionId(httpContext.Request);
 
-    var scrape = StrategyPlugins.Find(httpContext.RequestServices, "VardyParty.LocalService.V2.Scrape", "VardyParty.LocalService.V2.Scrape.V2ScrapePlugin");
+    var scrape = StrategyPlugins.Find(httpContext.RequestServices, "v2");
     if (scrape is null)
     {
-        requestLogger.LogError("[{CorrelationId}] /mp rejected from {RemoteIp}: V2 scrape plugin not registered", correlationId, remoteIp);
-        return Results.Json(new { error = "v2 scrape plugin not registered" },
+        requestLogger.LogError("[{CorrelationId}] /v2 rejected from {RemoteIp}: v2 plugin not registered", correlationId, remoteIp);
+        return Results.Json(new { error = "v2 plugin not registered" },
             statusCode: StatusCodes.Status500InternalServerError);
     }
 
     requestLogger.LogInformation(
-        "[{CorrelationId}] /mp request from {RemoteIp} targeting {TargetUrl}{StreamSuffix} doh={Doh} pop={Pop} connection={Connection}",
+        "[{CorrelationId}] /v2 request from {RemoteIp} targeting {TargetUrl}{StreamSuffix} doh={Doh} pop={Pop} connection={Connection}",
         correlationId,
         remoteIp,
         pageUrl,
@@ -444,11 +443,7 @@ app.MapPost("/mp", async (HostMpRequest request, HttpContext httpContext, Scrape
         PlayDns.PopFlag(popProxy),
         connectionId ?? "(none)");
 
-    await MpChromeWaitGate.OneResolve.WaitAsync(ct);
-    var pluginType = scrape.GetType();
-    var previousDoh = StrategyPlugins.GetStatic(pluginType, "DnsOverHttpsTemplate");
-    var previousProxy = StrategyPlugins.GetStatic(pluginType, "ProxyServer");
-    var previousChrome = StrategyPlugins.GetStatic(pluginType, "RequestChromeOptions");
+    using var requestScope = StrategyPlugins.Begin(httpContext.RequestServices, "v2", dohTemplate, popProxy);
     var wrote = false;
     var jsonOptions = new JsonSerializerOptions
     {
@@ -457,87 +452,63 @@ app.MapPost("/mp", async (HostMpRequest request, HttpContext httpContext, Scrape
     };
     try
     {
-        StrategyPlugins.SetStatic(pluginType, "DnsOverHttpsTemplate", dohTemplate);
-        StrategyPlugins.SetStatic(pluginType, "ProxyServer", popProxy);
-        StrategyPlugins.SetStatic(pluginType, "RequestChromeOptions", StrategyPlugins.PhoneChromeOptions(popProxy));
+        await V2ChromeWaitGate.OneResolve.WaitAsync(ct);
         if (popProxy is not null)
         {
             requestLogger.LogInformation(
-                "[{CorrelationId}] /mp using the paired phone network; waiting {ChipSeconds}s for chips, {PlaylistSeconds}s for a playlist, {SegmentSeconds}s for segments",
+                "[{CorrelationId}] /v2 using the paired phone network; waiting {ChipSeconds}s for chips, {PlaylistSeconds}s for a playlist, {SegmentSeconds}s for segments",
                 correlationId,
                 (int)PhonePathBudget.ChipWait.TotalSeconds,
                 (int)PhonePathBudget.PlaylistWait.TotalSeconds,
                 (int)PhonePathBudget.SegmentWait.TotalSeconds);
         }
 
-        if (!request.ListOnly && WantsMpStream(httpContext, request))
+        httpContext.Response.ContentType = V2NdjsonRelay.ContentType;
+        httpContext.Features.Get<Microsoft.AspNetCore.Http.Features.IHttpResponseBodyFeature>()
+            ?.DisableBuffering();
+        await foreach (var ev in StrategyPlugins.StreamAsync(httpContext.RequestServices, "v2", pageUrl, request.Stream, request.ListOnly, request.StreamResults, ct))
         {
-            httpContext.Response.ContentType = MpNdjsonRelay.ContentType;
-            httpContext.Features.Get<Microsoft.AspNetCore.Http.Features.IHttpResponseBodyFeature>()
-                ?.DisableBuffering();
-            var pluginRequest = StrategyPlugins.CreateMpRequest(pageUrl, request.Stream, request.ListOnly, request.StreamResults);
-            await foreach (var ev in StrategyPlugins.StreamV2Async(scrape, pluginRequest, ct))
-            {
-                if (!wrote)
-                {
-                    httpContext.Response.StatusCode = StrategyPlugins.EventType(ev) == "error" && StrategyPlugins.EventStatus(ev) is int status
-                        ? status
-                        : StatusCodes.Status200OK;
-                    wrote = true;
-                }
-
-                await httpContext.Response.WriteAsync(JsonSerializer.Serialize(ev, jsonOptions) + "\n", ct);
-                await httpContext.Response.Body.FlushAsync(ct);
-            }
-
             if (!wrote)
             {
-                httpContext.Response.StatusCode = StatusCodes.Status404NotFound;
-                await httpContext.Response.WriteAsync(
-                    JsonSerializer.Serialize(new { type = "error", statusCode = 404, error = "M3U8 not captured from MP page." }, jsonOptions) + "\n",
-                    ct);
+                httpContext.Response.StatusCode = StrategyPlugins.EventType(ev) == "error" && StrategyPlugins.EventStatus(ev) is int status
+                    ? status
+                    : StatusCodes.Status200OK;
+                wrote = true;
             }
 
-            requestLogger.LogInformation("[{CorrelationId}] /mp streamed to {RemoteIp}: status {StatusCode}",
-                correlationId, remoteIp, httpContext.Response.StatusCode);
-            if (!request.ListOnly)
-            {
-                var streamedOk = httpContext.Response.StatusCode is >= 200 and < 300;
-                scrapeHealth.TryReport(
-                    scrapeContext,
-                    pageUrl,
-                    streamName,
-                    "v2",
-                    ok: streamedOk,
-                    error: streamedOk ? null : "mp stream failed",
-                    httpStatus: httpContext.Response.StatusCode,
-                    durationMs: null);
-            }
-            return Results.Empty;
+            await httpContext.Response.WriteAsync(JsonSerializer.Serialize(ev, jsonOptions) + "\n", ct);
+            await httpContext.Response.Body.FlushAsync(ct);
         }
 
-        var outcome = await StrategyPlugins.ResolveV2Async(scrape, StrategyPlugins.CreateMpRequest(pageUrl, request.Stream, request.ListOnly, request.StreamResults), ct);
-        var outcomeStatus = StrategyPlugins.StatusCodeOf(outcome);
-        var outcomeResult = outcome.GetType().GetProperty("Result")!.GetValue(outcome)!;
-        requestLogger.LogInformation("[{CorrelationId}] /mp response to {RemoteIp}: status {StatusCode}", correlationId, remoteIp, outcomeStatus);
+        if (!wrote)
+        {
+            httpContext.Response.StatusCode = StatusCodes.Status404NotFound;
+            await httpContext.Response.WriteAsync(
+                JsonSerializer.Serialize(new { type = "error", statusCode = 404, error = "M3U8 not captured from MP page." }, jsonOptions) + "\n",
+                ct);
+        }
+
+        requestLogger.LogInformation("[{CorrelationId}] /v2 streamed to {RemoteIp}: status {StatusCode}",
+            correlationId, remoteIp, httpContext.Response.StatusCode);
         if (!request.ListOnly)
         {
+            var streamedOk = httpContext.Response.StatusCode is >= 200 and < 300;
             scrapeHealth.TryReport(
                 scrapeContext,
                 pageUrl,
-                streamName ?? StrategyPlugins.Text(outcomeResult, "SelectedStream"),
-                "v2",
-                ok: !string.IsNullOrWhiteSpace(StrategyPlugins.Text(outcomeResult, "Url")),
-                error: StrategyPlugins.Text(outcomeResult, "Error"),
-                httpStatus: outcomeStatus,
-                durationMs: StrategyPlugins.TimingsTotal(outcomeResult));
+                streamName,
+                StrategyPlugins.StrategyId("v2"),
+                ok: streamedOk,
+                error: streamedOk ? null : "v2 stream failed",
+                httpStatus: httpContext.Response.StatusCode,
+                durationMs: null);
         }
-        return Results.Json(outcomeResult, statusCode: outcomeStatus);
+        return Results.Empty;
     }
     catch (Exception ex)
     {
         requestLogger.LogError(ex,
-            "[{CorrelationId}] /mp failed for {RemoteIp} targeting {TargetUrl}",
+            "[{CorrelationId}] /v2 failed for {RemoteIp} targeting {TargetUrl}",
             correlationId,
             remoteIp,
             pageUrl);
@@ -548,21 +519,18 @@ app.MapPost("/mp", async (HostMpRequest request, HttpContext httpContext, Scrape
                 scrapeContext,
                 pageUrl,
                 streamName,
-                "v2",
+                StrategyPlugins.StrategyId("v2"),
                 ok: false,
-                error: "mp execution failed",
+                error: "v2 execution failed",
                 httpStatus: StatusCodes.Status500InternalServerError,
                 durationMs: null);
         }
 
-        return await MpStreamResponse.CompleteFailureAsync(httpContext, wrote, jsonOptions, ct);
+        return await V2StreamResponse.CompleteFailureAsync(httpContext, wrote, jsonOptions, ct);
     }
     finally
     {
-        StrategyPlugins.SetStatic(pluginType, "RequestChromeOptions", previousChrome);
-        StrategyPlugins.SetStatic(pluginType, "DnsOverHttpsTemplate", previousDoh);
-        StrategyPlugins.SetStatic(pluginType, "ProxyServer", previousProxy);
-        MpChromeWaitGate.OneResolve.Release();
+        V2ChromeWaitGate.OneResolve.Release();
     }
 }).RequireAuthorization(StreamViewerAuthorization.PolicyName);
 
@@ -619,24 +587,18 @@ app.MapPost("/dns", async (DnsPreferenceBody body, IServiceProvider services, IL
         template = PlayDns.TemplateFor(address);
     }
 
-    var browser = StrategyPlugins.BrowserManager(services);
-    if (browser is not null)
-        await StrategyPlugins.ApplyDnsAsync(browser, template);
+    await StrategyPlugins.ApplyDnsAsync(services, template);
 
     requestLogger.LogInformation("DoH preference from client: doh={Doh}", PlayDns.DohFlag(template));
     return Results.Ok(new { doh = template is not null });
 }).RequireAuthorization(StreamViewerAuthorization.PolicyName);
 
 // Graceful browser manager shutdown on SIGTERM / SIGINT (no-op when not registered).
-// System Chrome for /mp is a child process; kill those trees if harvest is still in flight.
+// System Chrome for /v2 is a child process; kill those trees if v2 is still in flight.
 lifetime.ApplicationStopping.Register(() =>
 {
     OpenedChromeShutdown.CloseAll();
-    var bm = StrategyPlugins.BrowserManager(app.Services);
-    if (bm is not null)
-    {
-        StrategyPlugins.DisposeBrowserAsync(bm).GetAwaiter().GetResult();
-    }
+    StrategyPlugins.DisposeAsync(app.Services).GetAwaiter().GetResult();
 });
 AppDomain.CurrentDomain.ProcessExit += (_, _) => OpenedChromeShutdown.CloseAll();
 
@@ -705,23 +667,6 @@ static void InsertLocalAppSettings(WebApplicationBuilder builder)
         ReloadOnChange = false,
         FileProvider = builder.Environment.ContentRootFileProvider
     });
-}
-
-static bool WantsMpStream(HttpContext http, HostMpRequest request)
-{
-    if (request.StreamResults)
-    {
-        return true;
-    }
-
-    if (http.Request.Headers.TryGetValue(MpNdjsonRelay.RequestHeaderName, out var flagged)
-        && flagged.ToString().Trim() == "1")
-    {
-        return true;
-    }
-
-    var accept = http.Request.Headers.Accept.ToString();
-    return accept.Contains("ndjson", StringComparison.OrdinalIgnoreCase);
 }
 
 static bool IsHttpPortAvailable(int port)

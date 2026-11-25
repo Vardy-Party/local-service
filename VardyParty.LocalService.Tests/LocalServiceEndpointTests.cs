@@ -30,8 +30,8 @@ public sealed class LocalServiceEndpointTests : IClassFixture<LocalServiceWebApp
             .Select(e => e.GetString())
             .ToArray();
         Assert.Contains("play.stream", caps);
-        Assert.Contains("mp", caps);
-        Assert.Contains("mp.chrome", caps);
+        Assert.Contains("v2", caps);
+        Assert.Contains("v2.chrome", caps);
         Assert.Contains("scrape.health", caps);
         Assert.DoesNotContain("madplay", caps);
     }
@@ -39,7 +39,7 @@ public sealed class LocalServiceEndpointTests : IClassFixture<LocalServiceWebApp
     [Fact]
     public async Task Mp_WhenPageUrlMissing_ReturnsBadRequest()
     {
-        using var response = await _client.PostAsJsonAsync("/mp", new { pageUrl = "" });
+        using var response = await _client.PostAsJsonAsync("/v2", new { pageUrl = "" });
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
 
         using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
@@ -51,14 +51,14 @@ public sealed class LocalServiceEndpointTests : IClassFixture<LocalServiceWebApp
     [Fact]
     public async Task Mp_WhenPluginMissing_ReturnsSanitizedServerError()
     {
-        using var response = await _client.PostAsJsonAsync("/mp", new
+        using var response = await _client.PostAsJsonAsync("/v2", new
         {
             pageUrl = "https://example.test/match"
         });
         Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
 
         using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
-        Assert.Equal("v2 scrape plugin not registered", doc.RootElement.GetProperty("error").GetString());
+        Assert.Equal("v2 plugin not registered", doc.RootElement.GetProperty("error").GetString());
         Assert.False(doc.RootElement.TryGetProperty("exceptionType", out _));
         Assert.False(doc.RootElement.TryGetProperty("message", out _));
     }
@@ -70,7 +70,7 @@ public sealed class LocalServiceEndpointTests : IClassFixture<LocalServiceWebApp
         Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
 
         using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
-        Assert.Equal("v1 scrape plugin not registered", doc.RootElement.GetProperty("error").GetString());
+        Assert.Equal("play plugin not registered", doc.RootElement.GetProperty("error").GetString());
         Assert.False(doc.RootElement.TryGetProperty("exceptionType", out _));
         Assert.False(doc.RootElement.TryGetProperty("message", out _));
     }
@@ -91,7 +91,7 @@ public sealed class LocalServiceEndpointTests : IClassFixture<LocalServiceWebApp
     {
         using var response = await SendAsync(
             HttpMethod.Post,
-            "/mp",
+            "/v2",
             new { pageUrl = "https://example.test/match" },
             ("X-Vardy-Doh", "2"));
         await AssertClientError(response, "X-Vardy-Doh must be 0 or 1");
@@ -125,7 +125,7 @@ public sealed class LocalServiceEndpointTests : IClassFixture<LocalServiceWebApp
     {
         using var response = await SendAsync(
             HttpMethod.Post,
-            "/mp",
+            "/v2",
             new { pageUrl = "https://example.test/match" },
             ("X-Vardy-Doh", "1"));
         await AssertClientError(response, "X-Vardy-Doh-Resolver must be an IP address when DoH is enabled");
@@ -136,7 +136,7 @@ public sealed class LocalServiceEndpointTests : IClassFixture<LocalServiceWebApp
     {
         using var response = await SendAsync(
             HttpMethod.Post,
-            "/mp",
+            "/v2",
             new { pageUrl = "https://example.test/match" },
             ("X-Vardy-Doh", "1"),
             ("X-Vardy-Doh-Resolver", "not-an-ip"));
@@ -151,7 +151,7 @@ public sealed class LocalServiceEndpointTests : IClassFixture<LocalServiceWebApp
             "/play/" + Uri.EscapeDataString("https://example.test/fb"),
             null,
             ("X-Vardy-Doh", "0"));
-        await AssertPluginMissing(response, "v1 scrape plugin not registered");
+        await AssertPluginMissing(response, "play plugin not registered");
     }
 
     [Fact]
@@ -161,7 +161,7 @@ public sealed class LocalServiceEndpointTests : IClassFixture<LocalServiceWebApp
             HttpMethod.Get,
             "/play/" + Uri.EscapeDataString("https://example.test/fb"),
             null);
-        await AssertPluginMissing(response, "v1 scrape plugin not registered");
+        await AssertPluginMissing(response, "play plugin not registered");
     }
 
     [Fact]
@@ -169,10 +169,10 @@ public sealed class LocalServiceEndpointTests : IClassFixture<LocalServiceWebApp
     {
         using var response = await SendAsync(
             HttpMethod.Post,
-            "/mp",
+            "/v2",
             new { pageUrl = "https://example.test/match" },
             ("X-Vardy-Doh", "0"));
-        await AssertPluginMissing(response, "v2 scrape plugin not registered");
+        await AssertPluginMissing(response, "v2 plugin not registered");
     }
 
     [Fact]
@@ -180,9 +180,9 @@ public sealed class LocalServiceEndpointTests : IClassFixture<LocalServiceWebApp
     {
         using var response = await SendAsync(
             HttpMethod.Post,
-            "/mp",
+            "/v2",
             new { pageUrl = "https://example.test/match" });
-        await AssertPluginMissing(response, "v2 scrape plugin not registered");
+        await AssertPluginMissing(response, "v2 plugin not registered");
     }
 
     [Fact]

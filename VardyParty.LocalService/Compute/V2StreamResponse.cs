@@ -6,7 +6,7 @@ namespace VardyParty.LocalService.Compute;
 /// How <c>POST /mp</c> finishes after an exception. Once NDJSON has started,
 /// the body must stay NDJSON.
 /// </summary>
-internal static class MpStreamResponse
+internal static class V2StreamResponse
 {
     public const string ExecutionFailed = "mp play execution failed";
 

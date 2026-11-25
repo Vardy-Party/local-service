@@ -1,10 +1,10 @@
 namespace VardyParty.LocalService.Compute;
 
 /// <summary>
-/// Phone-path Chrome waits. The V2 plugin reads its own per-request options.
+/// Phone-path Chrome waits. The harvest plugin applies these on the request.
 /// This gate only decides the wait values. It does not reference the plugin assembly.
 /// </summary>
-internal static class MpChromeWaitGate
+internal static class V2ChromeWaitGate
 {
     internal static readonly SemaphoreSlim OneResolve = new(1, 1);
 

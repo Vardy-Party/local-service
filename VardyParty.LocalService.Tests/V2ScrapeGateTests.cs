@@ -3,7 +3,7 @@ using Xunit;
 
 namespace VardyParty.LocalService.Tests;
 
-public class MpScrapeGateTests
+public class V2ScrapeGateTests
 {
     [Theory]
     [InlineData(null, true)]
@@ -16,20 +16,20 @@ public class MpScrapeGateTests
     [InlineData("OFF", false)]
     [InlineData("no", false)]
     public void FromValue_ParsesSwitch(string? value, bool expected) =>
-        Assert.Equal(expected, MpScrapeGate.FromValue(value).Enabled);
+        Assert.Equal(expected, V2ScrapeGate.FromValue(value).Enabled);
 
     [Fact]
-    public void Disabled_DropsOnlyMpChromeCapability()
+    public void Disabled_DropsOnlyV2ChromeCapability()
     {
-        var caps = new MpScrapeGate(false).FilterCapabilities(DiscoveryCapabilities.All);
-        Assert.DoesNotContain(DiscoveryCapabilities.MpChrome, caps);
+        var caps = new V2ScrapeGate(false).FilterCapabilities(DiscoveryCapabilities.All);
+        Assert.DoesNotContain(DiscoveryCapabilities.V2Chrome, caps);
         Assert.Contains(DiscoveryCapabilities.Mp, caps);
         Assert.Contains(DiscoveryCapabilities.PlayStreamQuery, caps);
         Assert.Contains(DiscoveryCapabilities.ComputeHost, caps);
-        Assert.False(DiscoveryCapabilities.SupportsMpChrome(caps));
+        Assert.False(DiscoveryCapabilities.SupportsV2Chrome(caps));
     }
 
     [Fact]
     public void Enabled_KeepsAllCapabilities() =>
-        Assert.Equal(DiscoveryCapabilities.All, new MpScrapeGate(true).FilterCapabilities(DiscoveryCapabilities.All));
+        Assert.Equal(DiscoveryCapabilities.All, new V2ScrapeGate(true).FilterCapabilities(DiscoveryCapabilities.All));
 }

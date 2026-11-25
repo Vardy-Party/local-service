@@ -54,7 +54,7 @@ public static class LocalServiceAuthExtensions
         services.AddSingleton(settings);
 
         // Opt-in only: default Testing hosts must set Testing:BypassAuth=true to skip JWT.
-        // VARDYPARTY_LOOPBACK_AUTH_BYPASS=1 is for PlayClientProbe / MpClientProbe on the
+        // VARDYPARTY_LOOPBACK_AUTH_BYPASS=1 is for PlayClientProbe / V2ClientProbe on the
         // laptop — scoped to loopback remotes only (never a LAN-wide JWT disable).
         var useTestingBypass = environment.IsEnvironment("Testing")
             && configuration.GetValue("Testing:BypassAuth", false);

@@ -4,13 +4,13 @@ using VardyParty.LocalService.Abstractions.Models;
 using VardyParty.LocalService.V2.Scrape;
 
 var url = args.FirstOrDefault(a => !a.StartsWith("-", StringComparison.Ordinal))
-          ?? throw new ArgumentException("Usage: MpHls <match-url> [--stream NAME] [--list] [--headed]");
+          ?? throw new ArgumentException("Usage: V2Hls <match-url> [--stream NAME] [--list] [--headed]");
 
 var listOnly = args.Any(a => a is "--list" or "-l");
 var headed = args.Any(a => a is "--headed");
 var stream = ArgValue(args, "--stream", "-s");
 
-var engine = new MpPlayEngine(
+var engine = new V2PlayEngine(
     new SystemChromeOptions
     {
         Headless = !headed,
@@ -18,9 +18,9 @@ var engine = new MpPlayEngine(
         PlaylistWait = TimeSpan.FromSeconds(25),
         SegmentWait = TimeSpan.FromSeconds(10)
     },
-    NullLogger<MpPlayEngine>.Instance);
+    NullLogger<V2PlayEngine>.Instance);
 
-var outcome = await engine.ExecuteAsync(new MpPlayRequest
+var outcome = await engine.ExecuteAsync(new V2PlayRequest
 {
     PageUrl = url,
     Stream = stream,

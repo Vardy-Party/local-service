@@ -5,14 +5,14 @@ if (args.Length == 0 || args[0] is "-h" or "--help")
 {
     Console.WriteLine(
         """
-        Resolve every chip on an MP match page with MpHttpStreamResolver,
+        Resolve every chip on an MP match page with V2HttpStreamResolver,
         then check each HLS playlist for actual video bytes.
 
         Usage:
-          dotnet run --project VardyParty.LocalService.MpHttpProbe -- <match-page-url>
+          dotnet run --project VardyParty.LocalService.V2HttpProbe -- <match-page-url>
 
         Example:
-          dotnet run --project VardyParty.LocalService.MpHttpProbe -- https://www.example.test/football/match-12345/home-vs-away.html
+          dotnet run --project VardyParty.LocalService.V2HttpProbe -- https://www.example.test/football/match-12345/home-vs-away.html
         """);
     return args.Length == 0 ? 1 : 0;
 }
@@ -31,14 +31,14 @@ using var handler = new SocketsHttpHandler
     AutomaticDecompression = DecompressionMethods.All
 };
 using var http = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(30) };
-var resolver = new MpHttpStreamResolver(http);
+var resolver = new V2HttpStreamResolver(http);
 var probe = new HlsVideoDataProbe(http);
 
 Console.WriteLine($"Page: {pageUrl}");
-Console.WriteLine("Resolver: MpHttpStreamResolver (all chips)");
+Console.WriteLine("Resolver: V2HttpStreamResolver (all chips)");
 Console.WriteLine();
 
-IReadOnlyList<MpHttpResolvedStream> streams;
+IReadOnlyList<V2HttpResolvedStream> streams;
 try
 {
     streams = await resolver.ResolveAsync(pageUrl);

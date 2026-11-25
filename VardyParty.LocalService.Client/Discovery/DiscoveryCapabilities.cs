@@ -8,15 +8,15 @@ public static class DiscoveryCapabilities
     public const string PlayStreamQuery = "play.stream";
 
     /// <summary>
-    /// Local service can resolve multi-stream player pages (V1/FB and legacy MP chip pages).
+    /// Local service accepts <c>POST /v2</c> for a page labelled with the v2 strategy.
     /// </summary>
-    public const string Mp = "mp";
+    public const string Mp = "v2";
 
     /// <summary>
-    /// Local service can resolve V2/MP match pages via system Chrome
-    /// (<c>POST /mp</c>), not Playwright-launched Chromium.
+    /// Local service resolves v2 pages with installed Chrome
+    /// (<c>POST /v2</c>), not Playwright-launched Chromium.
     /// </summary>
-    public const string MpChrome = "mp.chrome";
+    public const string V2Chrome = "v2.chrome";
 
     /// <summary>
     /// Local service can share this machine as a compute host
@@ -30,13 +30,13 @@ public static class DiscoveryCapabilities
     /// </summary>
     public const string ScrapeHealth = "scrape.health";
 
-    public static readonly string[] All = [PlayStreamQuery, Mp, MpChrome, ComputeHost, ScrapeHealth];
+    public static readonly string[] All = [PlayStreamQuery, Mp, V2Chrome, ComputeHost, ScrapeHealth];
 
     public static bool SupportsPlayStreamQuery(IEnumerable<string>? capabilities) =>
         Has(capabilities, PlayStreamQuery);
 
-    public static bool SupportsMpChrome(IEnumerable<string>? capabilities) =>
-        Has(capabilities, MpChrome);
+    public static bool SupportsV2Chrome(IEnumerable<string>? capabilities) =>
+        Has(capabilities, V2Chrome);
 
     public static bool SupportsComputeHost(IEnumerable<string>? capabilities) =>
         Has(capabilities, ComputeHost);
@@ -45,7 +45,7 @@ public static class DiscoveryCapabilities
         Has(capabilities, ScrapeHealth);
 
     /// <summary>
-    /// True when the service advertises <c>mp</c> (or legacy <c>madplay</c>).
+    /// True when the service advertises <c>v2</c> (or legacy <c>madplay</c>).
     /// </summary>
     public static bool SupportsMp(IEnumerable<string>? capabilities) =>
         Has(capabilities, Mp) || Has(capabilities, "madplay");

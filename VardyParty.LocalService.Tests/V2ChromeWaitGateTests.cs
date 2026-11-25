@@ -2,7 +2,7 @@ using VardyParty.LocalService.Compute;
 
 namespace VardyParty.LocalService.Tests;
 
-public sealed class MpChromeWaitGateTests
+public sealed class V2ChromeWaitGateTests
 {
     [Fact]
     public void ForRequest_PopProxyUsesPhonePathWaitsIncludingWarm()
@@ -18,7 +18,7 @@ public sealed class MpChromeWaitGateTests
         };
 
         // Act
-        var options = MpChromeWaitGate.ForRequest("http://127.0.0.1:9", defaults);
+        var options = V2ChromeWaitGate.ForRequest("http://127.0.0.1:9", defaults);
 
         // Assert
         Assert.NotNull(options);
@@ -43,7 +43,7 @@ public sealed class MpChromeWaitGateTests
         };
 
         // Act
-        var options = MpChromeWaitGate.ForRequest(null, defaults);
+        var options = V2ChromeWaitGate.ForRequest(null, defaults);
 
         // Assert
         Assert.Null(options);

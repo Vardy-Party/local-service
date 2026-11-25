@@ -315,7 +315,7 @@ public sealed class LocalServiceAuthEndpointTests : IClassFixture<LocalServiceAu
     [Fact]
     public async Task Mp_WithoutBearer_ReturnsUnauthorized()
     {
-        using var response = await _client.PostAsJsonAsync("/mp", new { pageUrl = "https://example.test/match" });
+        using var response = await _client.PostAsJsonAsync("/v2", new { pageUrl = "https://example.test/match" });
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
 
         using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
@@ -391,7 +391,7 @@ public sealed class LoopbackAuthBypassEndpointTests : IDisposable
             defaultRemoteIp: IPAddress.Parse("192.168.50.10"));
         using var client = factory.CreateClient();
 
-        using var response = await client.PostAsJsonAsync("/mp", new { pageUrl = "https://example.test/match" });
+        using var response = await client.PostAsJsonAsync("/v2", new { pageUrl = "https://example.test/match" });
 
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }

@@ -78,28 +78,6 @@ public sealed class LocalServicePlayClient
 
         await RefreshCapabilitiesIfNeededAsync(cancellationToken);
 
-        if (UseMpEndpoint(request.ResolutionStrategy, request.Source, _cachedCapabilities))
-        {
-            var mp = await ResolveMpWithRetryAsync(
-                baseUrl,
-                new MpPlayRequest { PageUrl = request.PageUrl, Stream = request.StreamName },
-                cancellationToken);
-            if (mp is null)
-            {
-                return null;
-            }
-
-            return new PlayResult
-            {
-                Url = mp.Url,
-                Error = mp.Error,
-                RequestHeaders = mp.RequestHeaders,
-                Timings = mp.Timings,
-                RewrittenSegments = mp.RewrittenSegments,
-                Streams = mp.Streams
-            };
-        }
-
         var effectiveRequest = DiscoveryCapabilities.SupportsPlayStreamQuery(_cachedCapabilities)
             ? request
             : new PlayRequest { PageUrl = request.PageUrl };
@@ -120,47 +98,10 @@ public sealed class LocalServicePlayClient
         return await CallPlayEndpointAsync(baseUrl, effectiveRequest, cancellationToken);
     }
 
-    public async Task<bool> SupportsMpChromeAsync(CancellationToken cancellationToken = default)
+    public async Task<bool> SupportsV2ChromeAsync(CancellationToken cancellationToken = default)
     {
         await RefreshCapabilitiesIfNeededAsync(cancellationToken);
-        return DiscoveryCapabilities.SupportsMpChrome(_cachedCapabilities);
-    }
-
-    public async Task<MpPlayResult?> ResolveMpAsync(MpPlayRequest request, CancellationToken cancellationToken = default)
-    {
-        if (string.IsNullOrWhiteSpace(request.PageUrl))
-        {
-            return null;
-        }
-
-        var baseUrl = await ResolveBaseUrlAsync(cancellationToken);
-        if (string.IsNullOrWhiteSpace(baseUrl))
-        {
-            return null;
-        }
-
-        return await ResolveMpWithRetryAsync(baseUrl, request, cancellationToken);
-    }
-
-    private async Task<MpPlayResult?> ResolveMpWithRetryAsync(
-        string baseUrl,
-        MpPlayRequest request,
-        CancellationToken cancellationToken)
-    {
-        var result = await CallMpEndpointAsync(baseUrl, request, cancellationToken);
-        if (result != null)
-        {
-            return result;
-        }
-
-        InvalidateDiscoveryCache();
-        var retryBase = await ResolveBaseUrlAsync(cancellationToken);
-        if (string.IsNullOrWhiteSpace(retryBase))
-        {
-            return null;
-        }
-
-        return await CallMpEndpointAsync(retryBase, request, cancellationToken);
+        return DiscoveryCapabilities.SupportsV2Chrome(_cachedCapabilities);
     }
 
     private async Task<bool> CheckHealthAsync(string baseUrl, CancellationToken cancellationToken)
@@ -252,38 +193,6 @@ public sealed class LocalServicePlayClient
         return null;
     }
 
-    private async Task<MpPlayResult?> CallMpEndpointAsync(
-        string baseUrl,
-        MpPlayRequest request,
-        CancellationToken cancellationToken)
-    {
-        var url = $"{baseUrl.TrimEnd('/')}/mp";
-        try
-        {
-            var json = JsonSerializer.Serialize(request, JsonOptions);
-            using var content = new StringContent(json, System.Text.Encoding.UTF8, "application/json");
-            using var response = await _httpClient.PostAsync(url, content, cancellationToken);
-            var body = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
-            var parsed = JsonSerializer.Deserialize<MpPlayResult>(body, JsonOptions);
-            if (!response.IsSuccessStatusCode)
-            {
-                return new MpPlayResult
-                {
-                    Error = parsed?.Error ?? $"Local service returned HTTP {(int)response.StatusCode}",
-                    Timings = parsed?.Timings,
-                    Streams = parsed?.Streams,
-                    Browser = parsed?.Browser
-                };
-            }
-
-            return parsed;
-        }
-        catch
-        {
-            return null;
-        }
-    }
-
     private async Task<PlayResult?> CallPlayEndpointAsync(
         string baseUrl,
         PlayRequest request,
@@ -336,11 +245,6 @@ public sealed class LocalServicePlayClient
         _cachedBaseUrlAt = DateTimeOffset.UtcNow;
         return _cachedBaseUrl;
     }
-
-    private static bool UseMpEndpoint(string? resolutionStrategy, string? source, IEnumerable<string>? capabilities) =>
-        (string.Equals(resolutionStrategy, "v2", StringComparison.OrdinalIgnoreCase)
-            || string.Equals(source, "mp", StringComparison.OrdinalIgnoreCase))
-        && capabilities?.Any(capability => string.Equals(capability, "mp.chrome", StringComparison.OrdinalIgnoreCase)) == true;
 
     private void InvalidateDiscoveryCache()
     {

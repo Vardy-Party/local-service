@@ -12,119 +12,182 @@ namespace VardyParty.LocalService;
 /// </summary>
 internal static class StrategyPlugins
 {
-    private static readonly string[] PluginFileNames =
-    [
-        "VardyParty.LocalService.Abstractions.dll",
-        "VardyParty.LocalService.V1.dll",
-        "VardyParty.LocalService.V2.dll",
-        "VardyParty.LocalService.V1.Scrape.dll",
-        "VardyParty.LocalService.V2.Scrape.dll"
-    ];
-
-    internal static object? ChromeOptions { get; private set; }
+    private const string EntryTypeName = "VardyParty.LocalService.Plugins.LocalServicePluginEntry";
 
     public static void Register(IServiceCollection services, IConfiguration configuration)
     {
-        foreach (var fileName in PluginFileNames)
+        var directory = AppContext.BaseDirectory;
+        if (!Directory.Exists(directory))
         {
-            Load(fileName);
+            return;
         }
 
-        var v1 = FindLoaded("VardyParty.LocalService.V1.Scrape");
-        if (v1 is not null)
+        foreach (var path in Directory.EnumerateFiles(directory, "VardyParty.LocalService.*.dll").OrderBy(Path.GetFileName, StringComparer.OrdinalIgnoreCase))
         {
-            var options = Create(v1, "VardyParty.LocalService.V1.Scrape.PlaywrightOptions");
-            Set(options, "Headless", configuration.GetValue("Playwright:Headless", true));
-            Set(options, "IncludeScreenshots", configuration.GetValue("Playwright:IncludeScreenshots", false));
-            InvokeStatic(v1, "VardyParty.LocalService.V1.Scrape.ScrapePluginServiceCollectionExtensions", "AddV1ScrapePlugin", services, options);
+            var assemblyName = Path.GetFileNameWithoutExtension(path);
+            if (assemblyName is "VardyParty.LocalService" or "VardyParty.LocalService.Client")
+            {
+                continue;
+            }
+
+            Load(path);
         }
 
-        var v2 = FindLoaded("VardyParty.LocalService.V2.Scrape");
-        if (v2 is not null)
+        foreach (var entry in Entries())
         {
-            var options = Create(v2, "VardyParty.LocalService.V2.Scrape.SystemChromeOptions");
-            Set(options, "Headless", configuration.GetValue("Chrome:Headless", true));
-            Set(options, "ExecutablePath", configuration["Chrome:ExecutablePath"]);
-            Set(options, "SegmentWait", TimeSpan.FromSeconds(configuration.GetValue("Chrome:SegmentWaitSeconds", 12)));
-            Set(options, "MinRewrittenSamples", configuration.GetValue("Chrome:MinRewrittenSamples", 3));
-            Set(options, "DumpScriptBodiesDir", configuration["Chrome:DumpScriptBodiesDir"]);
-            ChromeOptions = options;
-            InvokeStatic(v2, "VardyParty.LocalService.V2.Scrape.ScrapePluginServiceCollectionExtensions", "AddV2ScrapePlugin", services, options);
+            entry.GetMethod("Register")?.Invoke(null, [services, configuration]);
         }
     }
 
-    public static object? Find(IServiceProvider services, string assemblyName, string typeName)
+    public static object? Find(IServiceProvider services, string operation)
     {
-        var type = FindLoaded(assemblyName)?.GetType(typeName);
-        if (type is null)
+        foreach (var entry in Entries())
         {
-            return null;
-        }
-
-        var contract = FindLoaded("VardyParty.LocalService.Abstractions")
-            ?.GetType("VardyParty.LocalService.Abstractions.IStreamScrapePlugin");
-        if (contract is null)
-        {
-            return services.GetService(type);
-        }
-
-        var getServices = typeof(ServiceProviderServiceExtensions)
-            .GetMethod(nameof(ServiceProviderServiceExtensions.GetServices))!
-            .MakeGenericMethod(contract);
-        foreach (var item in (IEnumerable)getServices.Invoke(null, [services])!)
-        {
-            if (item is not null && type.IsInstanceOfType(item))
+            var declared = entry.GetField("Operation")?.GetValue(null) as string;
+            if (!string.Equals(declared, operation, StringComparison.OrdinalIgnoreCase))
             {
-                return item;
+                continue;
             }
+
+            return entry.GetMethod("GetPlugin")?.Invoke(null, [services]);
         }
 
         return null;
     }
 
-    public static async Task<object> ResolveV1Async(
-        object plugin,
-        string url,
-        string? streamName,
-        string? dnsOverHttpsTemplate,
-        string? proxyServer,
-        string? connectionId,
-        CancellationToken cancellationToken)
+    public static IDisposable Begin(IServiceProvider services, string operation, string? dnsOverHttps, string? proxy)
     {
-        object? options = null;
-        if (streamName is not null || dnsOverHttpsTemplate is not null || proxyServer is not null || connectionId is not null)
+        foreach (var entry in Entries())
         {
-            options = Create(plugin.GetType().Assembly, "VardyParty.LocalService.V1.Scrape.Models.PlayRequestOptions");
-            Set(options, "StreamName", streamName);
-            Set(options, "DnsOverHttpsTemplate", dnsOverHttpsTemplate);
-            Set(options, "ProxyServer", proxyServer);
-            Set(options, "ConnectionId", connectionId);
+            var declared = entry.GetField("Operation")?.GetValue(null) as string;
+            if (!string.Equals(declared, operation, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var begin = entry.GetMethod("Begin");
+            if (begin is null)
+            {
+                return EmptyBegin.Instance;
+            }
+
+            var args = begin.GetParameters().Length <= 3
+                ? new object?[] { services, dnsOverHttps, proxy }
+                : new object?[]
+                {
+                    services,
+                    dnsOverHttps,
+                    proxy,
+                    proxy is null ? null : PhonePathBudget.ChipWait,
+                    proxy is null ? null : PhonePathBudget.PlaylistWait,
+                    proxy is null ? null : PhonePathBudget.SegmentWait,
+                    proxy is null ? null : PhonePathBudget.WarmPlaylistWait,
+                    proxy is null ? null : PhonePathBudget.WarmSegmentWait
+                };
+            return begin.Invoke(null, args) as IDisposable ?? EmptyBegin.Instance;
         }
 
-        return await InvokeTaskAsync(plugin, "ResolveAsync", url, options, cancellationToken);
+        return EmptyBegin.Instance;
     }
 
-    public static object CreateMpRequest(string pageUrl, string? stream, bool listOnly, bool streamResults)
+    private static IEnumerable<Type> Entries() =>
+        AppDomain.CurrentDomain.GetAssemblies()
+            .Select(assembly => assembly.GetType(EntryTypeName))
+            .Where(type => type is not null)!;
+
+    private sealed class EmptyBegin : IDisposable
     {
-        var request = Create(Required("VardyParty.LocalService.Abstractions"), "VardyParty.LocalService.Abstractions.Models.MpPlayRequest");
-        Set(request, "PageUrl", pageUrl);
-        Set(request, "Stream", stream);
-        Set(request, "ListOnly", listOnly);
-        Set(request, "StreamResults", streamResults);
-        return request;
+        public static readonly EmptyBegin Instance = new();
+        public void Dispose() { }
     }
 
-    public static Task<object> ResolveV2Async(object plugin, object request, CancellationToken cancellationToken) =>
-        InvokeTaskAsync(plugin, "ResolveAsync", request, cancellationToken);
+    public static string StrategyId(string operation) =>
+        Entry(operation)?.GetField("StrategyId")?.GetValue(null) as string ?? operation;
 
-    public static async IAsyncEnumerable<object> StreamV2Async(
-        object plugin,
-        object request,
+    public static Task<object> ResolveAsync(IServiceProvider services, string operation, params object?[] args) =>
+        InvokeReturnedTask(EntryMethod(operation, "ResolveAsync"), WithServices(services, args));
+
+    public static IAsyncEnumerable<object> StreamAsync(
+        IServiceProvider services,
+        string operation,
+        params object?[] args)
+    {
+        var enumerable = EntryMethod(operation, "StreamAsync").Invoke(null, WithServices(services, args))
+            ?? throw new InvalidOperationException($"Plugin {operation} StreamAsync returned null.");
+        var cancellationToken = args.OfType<CancellationToken>().LastOrDefault();
+        return Enumerate(enumerable, cancellationToken);
+    }
+
+    public static async Task ApplyDnsAsync(IServiceProvider services, string? template)
+    {
+        foreach (var entry in Entries())
+        {
+            var method = entry.GetMethod("ApplyDnsAsync");
+            if (method is null)
+            {
+                continue;
+            }
+
+            await InvokePending(method.Invoke(null, [services, template]));
+        }
+    }
+
+    public static async Task DisposeAsync(IServiceProvider services)
+    {
+        foreach (var entry in Entries())
+        {
+            var method = entry.GetMethod("DisposeAsync");
+            if (method is null)
+            {
+                continue;
+            }
+
+            await InvokePending(method.Invoke(null, [services]));
+        }
+    }
+
+    private static Type? Entry(string operation) =>
+        Entries().FirstOrDefault(entry =>
+            string.Equals(entry.GetField("Operation")?.GetValue(null) as string, operation, StringComparison.OrdinalIgnoreCase));
+
+    private static MethodInfo EntryMethod(string operation, string methodName)
+    {
+        var entry = Entry(operation) ?? throw new InvalidOperationException($"{operation} plugin not registered");
+        return entry.GetMethod(methodName) ?? throw new MissingMethodException(entry.FullName, methodName);
+    }
+
+    private static object?[] WithServices(IServiceProvider services, object?[] args)
+    {
+        var invoke = new object?[args.Length + 1];
+        invoke[0] = services;
+        Array.Copy(args, 0, invoke, 1, args.Length);
+        return invoke;
+    }
+
+    private static async Task<object> InvokeReturnedTask(MethodInfo method, object?[] args)
+    {
+        var task = (Task)method.Invoke(null, args)!;
+        await task.ConfigureAwait(false);
+        return task.GetType().GetProperty("Result")!.GetValue(task)!;
+    }
+
+    private static async Task InvokePending(object? pending)
+    {
+        switch (pending)
+        {
+            case Task task:
+                await task;
+                break;
+            case ValueTask valueTask:
+                await valueTask;
+                break;
+        }
+    }
+
+    private static async IAsyncEnumerable<object> Enumerate(
+        object enumerable,
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
     {
-        var method = plugin.GetType().GetMethod("StreamAsync")
-            ?? throw new MissingMethodException(plugin.GetType().FullName, "StreamAsync");
-        var enumerable = method.Invoke(plugin, [request, cancellationToken])!;
         var enumerator = enumerable.GetType().GetMethod("GetAsyncEnumerator")!.Invoke(enumerable, [cancellationToken])!;
         try
         {
@@ -156,90 +219,6 @@ internal static class StrategyPlugins
         }
     }
 
-    public static object? GetStatic(Type type, string fieldName)
-    {
-        var local = type.GetField(fieldName)?.GetValue(null)
-            ?? throw new MissingFieldException(type.FullName, fieldName);
-        return local.GetType().GetProperty("Value")!.GetValue(local);
-    }
-
-    public static void SetStatic(Type type, string fieldName, object? value)
-    {
-        var local = type.GetField(fieldName)?.GetValue(null)
-            ?? throw new MissingFieldException(type.FullName, fieldName);
-        local.GetType().GetProperty("Value")!.SetValue(local, value);
-    }
-
-    public static object? PhoneChromeOptions(string? popProxy)
-    {
-        if (ChromeOptions is null || popProxy is null)
-        {
-            return null;
-        }
-
-        var defaults = new ChromeLaunchDefaults
-        {
-            Headless = (bool)Get(ChromeOptions, "Headless")!,
-            ExecutablePath = Get(ChromeOptions, "ExecutablePath") as string,
-            CdpReadyTimeout = (TimeSpan)Get(ChromeOptions, "CdpReadyTimeout")!,
-            ChipWait = (TimeSpan)Get(ChromeOptions, "ChipWait")!,
-            PlaylistWait = (TimeSpan)Get(ChromeOptions, "PlaylistWait")!,
-            SegmentWait = (TimeSpan)Get(ChromeOptions, "SegmentWait")!,
-            WarmPlaylistWait = (TimeSpan)Get(ChromeOptions, "WarmPlaylistWait")!,
-            WarmSegmentWait = (TimeSpan)Get(ChromeOptions, "WarmSegmentWait")!,
-            MinRewrittenSamples = (int)Get(ChromeOptions, "MinRewrittenSamples")!,
-            DumpScriptBodiesDir = Get(ChromeOptions, "DumpScriptBodiesDir") as string,
-            ProxyServer = Get(ChromeOptions, "ProxyServer") as string
-        };
-        var waits = MpChromeWaitGate.ForRequest(popProxy, defaults);
-        if (waits is null)
-        {
-            return null;
-        }
-
-        var created = Activator.CreateInstance(ChromeOptions.GetType())!;
-        foreach (var property in ChromeOptions.GetType().GetProperties(BindingFlags.Instance | BindingFlags.Public))
-        {
-            if (property.CanWrite)
-            {
-                property.SetValue(created, property.GetValue(ChromeOptions));
-            }
-        }
-
-        Set(created, "ChipWait", waits.ChipWait);
-        Set(created, "PlaylistWait", waits.PlaylistWait);
-        Set(created, "SegmentWait", waits.SegmentWait);
-        Set(created, "WarmPlaylistWait", waits.WarmPlaylistWait);
-        Set(created, "WarmSegmentWait", waits.WarmSegmentWait);
-        return created;
-    }
-
-    public static object? BrowserManager(IServiceProvider services)
-    {
-        var type = FindLoaded("VardyParty.LocalService.V1.Scrape")
-            ?.GetType("VardyParty.LocalService.V1.Scrape.BrowserManager");
-        return type is null ? null : services.GetService(type);
-    }
-
-    public static Task ApplyDnsAsync(object browser, string? template)
-    {
-        var task = browser.GetType().GetMethod("ApplyDnsPreferenceAsync")!.Invoke(browser, [template]);
-        return (Task)task!;
-    }
-
-    public static async Task DisposeBrowserAsync(object browser)
-    {
-        var pending = browser.GetType().GetMethod("DisposeAsync")!.Invoke(browser, null);
-        if (pending is ValueTask valueTask)
-        {
-            await valueTask;
-        }
-        else if (pending is Task task)
-        {
-            await task;
-        }
-    }
-
     public static int StatusCodeOf(object value) => (int)(Get(value, "StatusCode") ?? 500);
 
     public static string? Text(object value, string name) => Get(value, name) as string;
@@ -254,21 +233,20 @@ internal static class StrategyPlugins
 
     public static int? EventStatus(object value) => Get(value, "StatusCode") as int?;
 
-    private static Assembly Required(string assemblyName) =>
-        FindLoaded(assemblyName) ?? throw new InvalidOperationException($"Plugin assembly {assemblyName} is not loaded.");
-
     private static Assembly? FindLoaded(string assemblyName) =>
         AppDomain.CurrentDomain.GetAssemblies().FirstOrDefault(assembly => assembly.GetName().Name == assemblyName);
 
-    private static void Load(string fileName)
+    private static void Load(string pathOrName)
     {
-        var path = Path.Combine(AppContext.BaseDirectory, fileName);
+        var path = Path.IsPathRooted(pathOrName)
+            ? pathOrName
+            : Path.Combine(AppContext.BaseDirectory, pathOrName);
         if (!File.Exists(path))
         {
             return;
         }
 
-        var name = Path.GetFileNameWithoutExtension(fileName);
+        var name = Path.GetFileNameWithoutExtension(path);
         if (FindLoaded(name) is not null)
         {
             return;
@@ -277,35 +255,12 @@ internal static class StrategyPlugins
         AssemblyLoadContext.Default.LoadFromAssemblyPath(path);
     }
 
-    private static object Create(Assembly assembly, string typeName)
-    {
-        var type = assembly.GetType(typeName) ?? throw new TypeLoadException(typeName);
-        return Activator.CreateInstance(type) ?? throw new InvalidOperationException($"Could not create {typeName}.");
-    }
-
-    private static void InvokeStatic(Assembly assembly, string typeName, string methodName, params object?[] args)
-    {
-        var type = assembly.GetType(typeName) ?? throw new TypeLoadException(typeName);
-        var method = type.GetMethod(methodName) ?? throw new MissingMethodException(typeName, methodName);
-        method.Invoke(null, args);
-    }
-
-    private static async Task<object> InvokeTaskAsync(object target, string methodName, params object?[] args)
-    {
-        var method = target.GetType().GetMethod(methodName) ?? throw new MissingMethodException(target.GetType().FullName, methodName);
-        var task = (Task)method.Invoke(target, args)!;
-        await task.ConfigureAwait(false);
-        return task.GetType().GetProperty("Result")!.GetValue(task)!;
-    }
-
     private static object? Get(object target, string name) =>
         target.GetType().GetProperty(name)?.GetValue(target);
 
-    private static void Set(object target, string name, object? value) =>
-        target.GetType().GetProperty(name)?.SetValue(target, value);
 }
 
-internal sealed class HostMpRequest
+internal sealed class HostV2Request
 {
     public string? PageUrl { get; set; }
     public string? Stream { get; set; }
