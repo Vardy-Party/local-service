@@ -1,4 +1,15 @@
-using VardyParty.LocalService.Abstractions;
+internal interface IStreamScrapePlugin
+{
+    string StrategyId { get; }
+
+    bool Matches(string? resolutionStrategy, string? source);
+}
+
+internal static class StreamStrategyIds
+{
+    public const string V1 = "v1";
+    public const string V2 = "v2";
+}
 
 /// <summary>
 /// Resolves a typed scrape plugin from the registered <see cref="IStreamScrapePlugin"/> set.

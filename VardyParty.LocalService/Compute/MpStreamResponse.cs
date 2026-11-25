@@ -1,5 +1,4 @@
 using System.Text.Json;
-using VardyParty.LocalService.Abstractions.Models;
 
 namespace VardyParty.LocalService.Compute;
 
@@ -26,7 +25,7 @@ internal static class MpStreamResponse
         try
         {
             await http.Response.WriteAsync(
-                    JsonSerializer.Serialize(MpPlayEvent.Fail(500, ExecutionFailed), jsonOptions) + "\n",
+                    JsonSerializer.Serialize(new { type = "error", statusCode = 500, error = ExecutionFailed }, jsonOptions) + "\n",
                     cancellationToken)
                 .ConfigureAwait(false);
             await http.Response.Body.FlushAsync(cancellationToken).ConfigureAwait(false);

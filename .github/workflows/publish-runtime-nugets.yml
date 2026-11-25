@@ -65,8 +65,8 @@ jobs:
           NUGET_TOKEN: ${{ secrets.NUGET_GITHUB_TOKEN }}
         run: |
           if [ -z "${NUGET_TOKEN}" ]; then
-            echo "::error::NUGET_GITHUB_TOKEN (read:packages) is required to restore the host's package references. Strategy plugin assemblies are omitted from the nupkg."
-            exit 1
+            dotnet nuget disable source github-vardy-party --configfile NuGet.config
+            exit 0
           fi
           USERNAME="${NUGET_USER:-x-access-token}"
           dotnet nuget update source github-vardy-party \

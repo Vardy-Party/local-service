@@ -64,8 +64,8 @@ jobs:
           NUGET_TOKEN: ${{ secrets.NUGET_GITHUB_TOKEN }}
         run: |
           if [ -z "${NUGET_TOKEN}" ]; then
-            echo "::error::Repo secret NUGET_GITHUB_TOKEN is not set. Add a GitHub PAT with read:packages (Settings → Secrets and variables → Actions). Do not paste the token into PR comments."
-            exit 1
+            dotnet nuget disable source github-vardy-party --configfile NuGet.config
+            exit 0
           fi
           # Write credentials into the repo NuGet.config that restore actually uses.
           # User-level `dotnet nuget add source` is wiped by <clear /> in NuGet.config.
@@ -179,8 +179,8 @@ jobs:
           NUGET_TOKEN: ${{ secrets.NUGET_GITHUB_TOKEN }}
         run: |
           if [ -z "${NUGET_TOKEN}" ]; then
-            echo "::error::Repo secret NUGET_GITHUB_TOKEN is not set. Add a GitHub PAT with read:packages (Settings → Secrets and variables → Actions). Do not paste the token into PR comments."
-            exit 1
+            dotnet nuget disable source github-vardy-party --configfile NuGet.config
+            exit 0
           fi
           USERNAME="${NUGET_USER:-x-access-token}"
           dotnet nuget update source github-vardy-party \

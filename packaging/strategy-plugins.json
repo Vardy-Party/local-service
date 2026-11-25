@@ -1,0 +1,7 @@
+[
+  { "id": "VardyParty.LocalService.Abstractions", "version": "0.2.7" },
+  { "id": "VardyParty.LocalService.V1", "version": "0.1.5" },
+  { "id": "VardyParty.LocalService.V2", "version": "0.1.7" },
+  { "id": "VardyParty.LocalService.V1.Scrape", "version": "0.1.19" },
+  { "id": "VardyParty.LocalService.V2.Scrape", "version": "0.1.27" }
+]

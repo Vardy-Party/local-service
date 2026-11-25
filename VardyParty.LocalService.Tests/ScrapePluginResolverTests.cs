@@ -1,5 +1,3 @@
-using VardyParty.LocalService.Abstractions;
-
 namespace VardyParty.LocalService.Tests;
 
 public sealed class ScrapePluginResolverTests

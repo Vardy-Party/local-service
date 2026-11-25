@@ -1,5 +1,4 @@
 using System.Text.Json;
-using VardyParty.LocalService.Abstractions.Models;
 using VardyParty.LocalService.Client.Discovery;
 using VardyParty.LocalService.Client.Models;
 
@@ -79,7 +78,7 @@ public sealed class LocalServicePlayClient
 
         await RefreshCapabilitiesIfNeededAsync(cancellationToken);
 
-        if (V2.StreamStrategy.UseMpEndpoint(request.ResolutionStrategy, request.Source, _cachedCapabilities))
+        if (UseMpEndpoint(request.ResolutionStrategy, request.Source, _cachedCapabilities))
         {
             var mp = await ResolveMpWithRetryAsync(
                 baseUrl,
@@ -337,6 +336,11 @@ public sealed class LocalServicePlayClient
         _cachedBaseUrlAt = DateTimeOffset.UtcNow;
         return _cachedBaseUrl;
     }
+
+    private static bool UseMpEndpoint(string? resolutionStrategy, string? source, IEnumerable<string>? capabilities) =>
+        (string.Equals(resolutionStrategy, "v2", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(source, "mp", StringComparison.OrdinalIgnoreCase))
+        && capabilities?.Any(capability => string.Equals(capability, "mp.chrome", StringComparison.OrdinalIgnoreCase)) == true;
 
     private void InvalidateDiscoveryCache()
     {

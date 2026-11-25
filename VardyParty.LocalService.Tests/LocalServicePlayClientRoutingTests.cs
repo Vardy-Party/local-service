@@ -1,7 +1,6 @@
 using System.Net;
 using System.Text;
 using System.Text.Json;
-using VardyParty.LocalService.Abstractions.Models;
 using VardyParty.LocalService.Client;
 using VardyParty.LocalService.Client.Discovery;
 using VardyParty.LocalService.Client.Models;

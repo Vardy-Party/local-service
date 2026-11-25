@@ -16,10 +16,6 @@
 
   <ItemGroup>
     <PackageReference Include="System.Text.Json" Version="11.0.0" Condition="'$(TargetFramework)' == 'netstandard2.1'" />
-    <!-- Newest published Strategies packages on the GitHub Packages feed (the Update Strategies packages bot raises these). -->
-    <PackageReference Include="VardyParty.LocalService.Abstractions" Version="0.2.7" />
-    <PackageReference Include="VardyParty.LocalService.V1" Version="0.1.5" />
-    <PackageReference Include="VardyParty.LocalService.V2" Version="0.1.7" />
   </ItemGroup>
 
   <ItemGroup>

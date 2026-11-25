@@ -16,12 +16,6 @@
     <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="11.0.0" />
     <PackageReference Include="Microsoft.Playwright" Version="1.58.0" />
     <PackageReference Include="SIPSorcery" Version="10.0.16" />
-    <!-- Newest published Strategies packages from github-vardy-party (not a guessed local pack). -->
-    <PackageReference Include="VardyParty.LocalService.Abstractions" Version="0.2.7" />
-    <PackageReference Include="VardyParty.LocalService.V1" Version="0.1.5" />
-    <PackageReference Include="VardyParty.LocalService.V2" Version="0.1.7" />
-    <PackageReference Include="VardyParty.LocalService.V1.Scrape" Version="0.1.19" />
-    <PackageReference Include="VardyParty.LocalService.V2.Scrape" Version="0.1.27" />
   </ItemGroup>
 
   <ItemGroup>

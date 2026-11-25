@@ -1,5 +1,4 @@
 using VardyParty.LocalService.Compute;
-using VardyParty.LocalService.V2.Scrape;
 
 namespace VardyParty.LocalService.Tests;
 
@@ -9,7 +8,7 @@ public sealed class MpChromeWaitGateTests
     public void ForRequest_PopProxyUsesPhonePathWaitsIncludingWarm()
     {
         // Arrange
-        var defaults = new SystemChromeOptions
+        var defaults = new ChromeLaunchDefaults
         {
             ChipWait = TimeSpan.FromSeconds(1),
             PlaylistWait = TimeSpan.FromSeconds(2),
@@ -36,7 +35,7 @@ public sealed class MpChromeWaitGateTests
     public void ForRequest_WithoutPopProxyKeepsSingleton()
     {
         // Arrange
-        var defaults = new SystemChromeOptions
+        var defaults = new ChromeLaunchDefaults
         {
             ChipWait = TimeSpan.FromSeconds(1),
             PlaylistWait = TimeSpan.FromSeconds(2),
